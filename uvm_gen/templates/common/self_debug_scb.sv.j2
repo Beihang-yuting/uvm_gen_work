@@ -1,0 +1,71 @@
+{{ header(file_name) }}
+`ifndef  COMMON_SELF_DEBUG_SCB__SV
+`define  COMMON_SELF_DEBUG_SCB__SV
+
+
+class self_debug_scb_demo_trans extends uvm_object;
+    int m_value;
+    function new(string name = "self_debug_scb_demo_trans");
+        super.new(name);
+    endfunction
+    function bit self_define_do_compare(self_debug_scb_demo_trans cmp_trans, output string diff, input int kind = -1);
+        return 1;
+    endfunction
+endclass
+
+
+class common_self_debug_scb #(type TRANS_TYPE = self_debug_scb_demo_trans ) extends uvm_component;
+    `uvm_component_param_utils_begin(common_self_debug_scb#(TRANS_TYPE))
+    `uvm_component_utils_end
+    int   m_from_mon_cnt;
+    int   m_from_drv_cnt;
+    int   m_cmp_pass_cnt;
+    string    diff;
+    TRANS_TYPE m_rm_pkt_q[bit[31:0]][$];
+    function new(string name="common_self_debug_scb",uvm_component parent);
+        super.new(name,parent);
+        this.m_from_mon_cnt = 0;
+        this.m_from_drv_cnt = 0;
+        this.m_cmp_pass_cnt = 0;
+    endfunction
+
+    extern virtual function void report_phase(uvm_phase phase);
+
+    task send_rm_trans_to_cmp(TRANS_TYPE rm_tr,input bit[31:0] stream_id=-1,int kind=-1);
+        this.m_from_drv_cnt++;
+        this.m_rm_pkt_q[stream_id].push_back(rm_tr);
+    endtask
+
+    task send_dut_trans_to_cmp(TRANS_TYPE dut_tr,input bit[31:0] stream_id=-1,int kind=-1);
+        TRANS_TYPE rm_tr;
+        this.m_from_mon_cnt++;
+        diff = "rm    vs    dut   \n";
+        if(m_rm_pkt_q[stream_id].size() == 0) begin
+            `uvm_fatal(get_full_name,$sformatf("stream_id=0x%0d drv send trans queue has been empty",stream_id))
+        end
+        rm_tr = m_rm_pkt_q[stream_id].pop_front();
+        if(!rm_tr.self_define_do_compare(dut_tr,diff,kind)) begin
+            `uvm_error(get_full_name,$sformatf({"\n",diff}));
+        end
+        else begin
+            this.m_cmp_pass_cnt++;
+        end
+    endtask
+endclass
+
+function void common_self_debug_scb::report_phase(uvm_phase phase);
+    string tmp_str;
+    super.report_phase(phase);
+    tmp_str = "\n\ncommon debug scb report\n";
+    tmp_str = {tmp_str,$sformatf("m_from_drv_cnt=%0d\n",m_from_drv_cnt)};
+    tmp_str = {tmp_str,$sformatf("m_from_mon_cnt=%0d\n",m_from_mon_cnt)};
+    tmp_str = {tmp_str,$sformatf("m_cmp_pass_cnt=%0d\n",m_cmp_pass_cnt)};
+    `uvm_info(get_full_name,tmp_str,UVM_NONE);
+    foreach( this.m_rm_pkt_q[i] ) begin
+        if(this.m_rm_pkt_q[i].size()>0) begin
+            `uvm_error(get_full_name,$sformatf("stream_id=0x%0d still hase %0d pkt from drv to compare",i,m_rm_pkt_q[i].size()));
+        end
+    end
+endfunction
+
+`endif

@@ -1,0 +1,22 @@
+{{ header(file_name) }}
+`ifndef  COMMON_DEC__SV
+`define  COMMON_DEC__SV
+
+
+`define CLK_GEN(CLK,HALF_PERIED,OFFSET) \
+reg CLK; \
+initial begin: ``CLK``_gen \
+    CLK <= 0;\
+    #OFFSET;\
+    forever # HALF_PERIED CLK = ~CLK; \
+end
+
+`define RST_GEN(RST_N,EN_DLY) \
+reg RST_N; \
+initial begin: ``RST_N``_gen\
+    RST_N <= '0; \
+    #EN_DLY; \
+    RST_N <= '1; \
+end
+
+`endif

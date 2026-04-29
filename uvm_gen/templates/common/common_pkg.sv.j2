@@ -1,0 +1,24 @@
+{{ header(file_name) }}
+`ifndef  COMMON_LIB_PKG__SV
+`define  COMMON_LIB_PKG__SV
+
+
+package       common_lib_pkg;
+
+    timeunit      1ns;
+    timeprecision 1ps;
+    import uvm_pkg::*;
+
+    `include "common_dec.sv"
+    `include "common_draw_table.sv"
+    `include "common_report_server.sv"
+    `include "common_self_debug_scb.sv"
+    `include "common_uvm_scb.sv"
+
+endpackage
+
+import uvm_pkg::*;
+
+import common_lib_pkg::*;
+
+`endif

@@ -1,0 +1,33 @@
+{{ header(file_name) }}
+`ifndef  COMMON_REPORT_SERVER__SV
+`define  COMMON_REPORT_SERVER__SV
+
+
+class common_report_server extends uvm_report_server;
+    virtual function string compose_message(uvm_severity severity,
+                                            string   name,
+                                            string   id,
+                                            string   message,
+                                            string   filename,
+                                            int      line);
+        uvm_severity_type severity_type = uvm_severity_type'(severity);
+        if(severity_type == UVM_INFO) begin
+            if(name == id) begin
+                return $sformatf( "%-8s @%t %s: %s",severity_type.name(),$time,name,message);
+            end
+            else begin
+                return $sformatf( "%-8s @%t %s [%s] : %s",severity_type.name(),$time,name,id,message);
+            end
+        end
+        else if((severity_type == UVM_WARNING) ||(severity_type == UVM_ERROR) ||(severity_type == UVM_FATAL))begin
+            if(name == id) begin
+                return $sformatf( "%-8s %s(%0d) @%t %s: %s",severity_type.name(),filename,line,$time,name,message);
+            end
+            else begin
+                return $sformatf( "%-8s %s(%0d) @%t %s [%s]: %s",severity_type.name(),filename,line,$time,name,id,message);
+            end
+        end
+    endfunction
+endclass
+
+`endif
