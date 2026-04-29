@@ -1,0 +1,23 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_SQR__SV
+`define  {{ name_upper }}_SQR__SV
+
+
+class {{ name }}_sqr extends uvm_sequencer #({{ name }}_trans);
+
+    `uvm_component_utils({{ name }}_sqr)
+
+    {{ name }}_agt_cfg    m_cfg;
+
+    // FIFO references for self-contained mode (set by agent)
+    uvm_tlm_analysis_fifo #({{ name }}_trans)  m_mon_fifo;
+    uvm_tlm_analysis_fifo #({{ name }}_trans)  m_req_fifo;
+    uvm_tlm_analysis_fifo #({{ name }}_trans)  m_rsp_fifo;
+
+    function new(string name="{{ name }}_sqr", uvm_component parent=null);
+        super.new(name, parent);
+    endfunction
+
+endclass
+
+`endif

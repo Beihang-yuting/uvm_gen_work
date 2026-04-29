@@ -1,0 +1,61 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_BASE_SEQ__SV
+`define  {{ name_upper }}_BASE_SEQ__SV
+
+
+class {{ name }}_base_seq extends uvm_sequence #({{ name }}_trans);
+
+    `uvm_object_utils({{ name }}_base_seq)
+    `uvm_declare_p_sequencer({{ name }}_sqr)
+
+    function new(string name = "{{ name }}_base_seq");
+        super.new(name);
+    endfunction : new
+
+    // Fire & Forget: send transaction without waiting for response
+    virtual task send_trans(input {{ name }}_trans tr);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_MASTER, AGENT_ONLY_MASTER})) begin
+            `uvm_fatal(get_full_name, "send_trans only valid in MASTER/ONLY_MASTER mode")
+        end
+        start_item(tr);
+        finish_item(tr);
+    endtask : send_trans
+
+    // Send & Wait Response: send transaction and wait for response
+    virtual task send_trans_with_rsp(input {{ name }}_trans tr, output {{ name }}_trans rsp);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_MASTER, AGENT_ONLY_MASTER})) begin
+            `uvm_fatal(get_full_name, "send_trans_with_rsp only valid in MASTER/ONLY_MASTER mode")
+        end
+        start_item(tr);
+        finish_item(tr);
+        get_response(rsp);
+    endtask : send_trans_with_rsp
+
+    // Monitor Only: wait for a monitored transaction
+    virtual task wait_trans(output {{ name }}_trans tr);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_MASTER, AGENT_SLAVE, AGENT_ONLY_MONITOR})) begin
+            `uvm_fatal(get_full_name, "wait_trans not valid in current mode")
+        end
+        p_sequencer.m_mon_fifo.get(tr);
+    endtask : wait_trans
+
+    // Slave: wait for a request from the bus
+    virtual task wait_request(output {{ name }}_trans req);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_SLAVE, AGENT_ONLY_SLAVE})) begin
+            `uvm_fatal(get_full_name, "wait_request only valid in SLAVE/ONLY_SLAVE mode")
+        end
+        p_sequencer.m_req_fifo.get(req);
+    endtask : wait_request
+
+    // Slave: send a response back
+    virtual task send_response(input {{ name }}_trans rsp);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_SLAVE, AGENT_ONLY_SLAVE})) begin
+            `uvm_fatal(get_full_name, "send_response only valid in SLAVE/ONLY_SLAVE mode")
+        end
+        start_item(rsp);
+        finish_item(rsp);
+    endtask : send_response
+
+endclass
+
+`endif

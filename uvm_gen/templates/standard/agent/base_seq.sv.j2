@@ -1,0 +1,19 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_BASE_SEQ__SV
+`define  {{ name_upper }}_BASE_SEQ__SV
+
+
+class {{ name }}_base_seq extends uvm_sequence #({{ name }}_trans);
+
+    `uvm_object_utils({{ name }}_base_seq)
+    `uvm_declare_p_sequencer({{ name }}_sqr)
+
+    function new(string name = "{{ name }}_base_seq");
+        super.new(name);
+    endfunction
+
+    // User writes body() with start_item/finish_item
+
+endclass
+
+`endif

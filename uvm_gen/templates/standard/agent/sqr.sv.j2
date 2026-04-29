@@ -1,0 +1,18 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_SQR__SV
+`define  {{ name_upper }}_SQR__SV
+
+
+class {{ name }}_sqr extends uvm_sequencer #({{ name }}_trans);
+
+    `uvm_component_utils({{ name }}_sqr)
+
+    {{ name }}_agt_cfg    m_cfg;
+
+    function new(string name="{{ name }}_sqr", uvm_component parent=null);
+        super.new(name, parent);
+    endfunction
+
+endclass
+
+`endif

@@ -1,0 +1,23 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_AGENT_PKG__SV
+`define  {{ name_upper }}_AGENT_PKG__SV
+
+package {{ name }}_agent_pkg;
+
+    timeunit      1ns;
+    timeprecision 1ps;
+    import uvm_pkg::*;
+
+    import common_lib_pkg::*;
+    `include "{{ name }}_trans.sv"
+    `include "{{ name }}_agt_cfg.sv"
+    `include "{{ name }}_drv.sv"
+    `include "{{ name }}_mon.sv"
+    `include "{{ name }}_sqr.sv"
+    `include "{{ name }}_agent.sv"
+    `include "{{ name }}_base_seq.sv"
+endpackage
+
+import {{ name }}_agent_pkg::*;
+
+`endif

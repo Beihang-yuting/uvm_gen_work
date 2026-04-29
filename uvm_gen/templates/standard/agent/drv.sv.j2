@@ -1,0 +1,43 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_DRV__SV
+`define  {{ name_upper }}_DRV__SV
+
+class {{ name }}_drv extends uvm_driver #({{ name }}_trans);
+    `uvm_component_utils_begin({{ name }}_drv)
+    `uvm_component_utils_end
+
+    {{ name }}_agt_cfg    m_cfg;
+    int                   m_get_trans_cnt;
+    common_self_debug_scb#({{ name }}_trans)  m_debug_scb;
+
+    extern function new(string name="{{ name }}_drv", uvm_component parent=null);
+    extern virtual task run_phase(uvm_phase phase);
+    extern virtual task master_drive();
+    extern virtual task slave_drive();
+endclass
+
+function {{ name }}_drv::new(string name="{{ name }}_drv", uvm_component parent=null);
+    super.new(name, parent);
+    m_get_trans_cnt = 0;
+endfunction : new
+
+task {{ name }}_drv::run_phase(uvm_phase phase);
+    super.run_phase(phase);
+    case(m_cfg.m_mode)
+        AGENT_MASTER, AGENT_ONLY_MASTER: master_drive();
+        AGENT_SLAVE, AGENT_ONLY_SLAVE:   slave_drive();
+        default: `uvm_fatal(get_full_name, "only-monitor mode should not have driver")
+    endcase
+endtask : run_phase
+
+task {{ name }}_drv::master_drive();
+    //TODO: implement master drive logic
+    `uvm_info(get_full_name, "master_drive started", UVM_NONE)
+endtask : master_drive
+
+task {{ name }}_drv::slave_drive();
+    //TODO: implement slave drive logic
+    `uvm_info(get_full_name, "slave_drive started", UVM_NONE)
+endtask : slave_drive
+
+`endif

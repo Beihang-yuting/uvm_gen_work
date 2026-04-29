@@ -1,0 +1,30 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_IF__SV
+`define  {{ name_upper }}_IF__SV
+
+
+interface {{ name }}_if(input logic clk, input logic rst_n);
+
+    //wire        in_vld;
+
+    clocking drv_cb @(posedge clk);
+        //default input #1step output #0.1ns;
+        //output  in_vld;
+    endclocking:drv_cb
+
+    clocking mon_cb @(posedge clk);
+        //default input #1step ;
+        //output  in_vld;
+    endclocking:mon_cb
+
+    modport drv_mp (
+        clocking drv_cb
+    );
+
+    modport mon_mp (
+        clocking mon_cb
+    );
+
+endinterface
+
+`endif

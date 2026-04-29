@@ -1,0 +1,27 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_AGT_CFG__SV
+`define  {{ name_upper }}_AGT_CFG__SV
+
+typedef enum {
+    AGENT_MASTER,
+    AGENT_SLAVE,
+    AGENT_ONLY_MASTER,
+    AGENT_ONLY_SLAVE,
+    AGENT_ONLY_MONITOR
+} agent_mode_e;
+
+class {{ name }}_agt_cfg extends uvm_object;
+    `uvm_object_utils_begin({{ name }}_agt_cfg)
+    `uvm_object_utils_end
+
+    agent_mode_e            m_mode = AGENT_MASTER;
+    bit                     m_auto_start_seq = 0;
+    bit                     m_self_debug_en  = 0;
+    uvm_active_passive_enum m_is_active = UVM_ACTIVE;
+
+    function new(string name = "{{ name }}_agt_cfg");
+        super.new(name);
+    endfunction
+endclass
+
+`endif

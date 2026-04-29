@@ -1,0 +1,92 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_AGENT__SV
+`define  {{ name_upper }}_AGENT__SV
+
+
+class {{ name }}_agent extends uvm_agent;
+
+    `uvm_component_utils_begin({{ name }}_agent)
+    `uvm_component_utils_end
+
+    {{ name }}_agt_cfg                m_cfg;
+    {{ name }}_sqr                    m_sqr;
+    {{ name }}_drv                    m_drv;
+    {{ name }}_mon                    m_mon;
+
+    uvm_analysis_port#({{ name }}_trans)              m_mon_ap;
+
+    common_self_debug_scb#({{ name }}_trans)          m_debug_scb;
+
+    extern function new(string name="{{ name }}_agent", uvm_component parent=null);
+    extern virtual function void build_phase(uvm_phase phase);
+    extern virtual function void connect_phase(uvm_phase phase);
+
+endclass
+
+function {{ name }}_agent::new(string name="{{ name }}_agent", uvm_component parent=null);
+    super.new(name, parent);
+endfunction : new
+
+function void {{ name }}_agent::build_phase(uvm_phase phase);
+    super.build_phase(phase);
+
+    if(this.m_cfg == null) begin
+        `uvm_info(get_full_name, "{{ block_name }} does not set agent_cfg, creating default", UVM_NONE);
+        this.m_cfg = {{ name }}_agt_cfg::type_id::create("m_cfg", this);
+    end
+
+    `uvm_info(get_full_name, $sformatf("agent work at mode=%s build_phase start", this.m_cfg.m_mode.name), UVM_NONE);
+
+    // Monitor is always created
+    m_mon = {{ name }}_mon::type_id::create("m_mon", this);
+
+    case(this.m_cfg.m_mode)
+        AGENT_MASTER, AGENT_SLAVE: begin
+            m_sqr = {{ name }}_sqr::type_id::create("m_sqr", this);
+            m_drv = {{ name }}_drv::type_id::create("m_drv", this);
+        end
+        AGENT_ONLY_MASTER, AGENT_ONLY_SLAVE: begin
+            m_sqr = {{ name }}_sqr::type_id::create("m_sqr", this);
+            m_drv = {{ name }}_drv::type_id::create("m_drv", this);
+        end
+        AGENT_ONLY_MONITOR: begin
+            // monitor-only mode: no driver or sequencer
+        end
+    endcase
+
+    // Create analysis port (no internal FIFOs in standard mode)
+    m_mon_ap = new("m_mon_ap", this);
+
+    // Pass config to sub-components
+    m_mon.m_cfg = this.m_cfg;
+    if(m_drv != null) begin
+        m_drv.m_cfg = this.m_cfg;
+    end
+
+    // Debug scoreboard
+    if(this.m_cfg.m_self_debug_en == 1) begin
+        this.m_debug_scb = common_self_debug_scb#({{ name }}_trans)::type_id::create("m_debug_scb", this);
+    end
+endfunction : build_phase
+
+function void {{ name }}_agent::connect_phase(uvm_phase phase);
+    super.connect_phase(phase);
+
+    // Driver <-> Sequencer
+    if(m_drv != null && m_sqr != null) begin
+        m_drv.seq_item_port.connect(m_sqr.seq_item_export);
+    end
+
+    // Monitor -> Analysis Port only (no internal FIFOs)
+    m_mon.m_ap.connect(m_mon_ap.analysis_export);
+
+    // Debug scoreboard wiring
+    if(this.m_cfg.m_self_debug_en == 1) begin
+        if(m_drv != null) begin
+            this.m_drv.m_debug_scb = this.m_debug_scb;
+        end
+        this.m_mon.m_debug_scb = this.m_debug_scb;
+    end
+endfunction : connect_phase
+
+`endif

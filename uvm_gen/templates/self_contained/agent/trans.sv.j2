@@ -1,0 +1,27 @@
+{{ header(file_name) }}
+`ifndef  {{ name_upper }}_TRANS__SV
+`define  {{ name_upper }}_TRANS__SV
+
+
+class {{ name }}_trans extends uvm_sequence_item;
+
+    `uvm_object_utils_begin({{ name }}_trans)
+    `uvm_object_utils_end
+
+    extern constraint trans_cons;
+
+    function new(string name="{{ name }}_trans");
+        super.new(name);
+    endfunction
+
+    function bit self_define_do_compare({{ name }}_trans cmp_trans, output string diff, input int kind = -1);
+        return 1;
+    endfunction
+
+endclass
+
+constraint {{ name }}_trans::trans_cons{
+    //soft m_pkg_len dist {[0:2] :/ 1, 3 :/ 1};
+}
+
+`endif
