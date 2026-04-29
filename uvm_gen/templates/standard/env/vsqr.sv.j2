@@ -1,0 +1,23 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_VSQR__SV
+`define  {{ block_name | upper }}_VSQR__SV
+
+class {{ block_name }}_vsqr extends uvm_sequencer;
+
+    `uvm_component_utils_begin({{ block_name }}_vsqr)
+    `uvm_component_utils_end
+
+    // dec agt_sqr
+{% for agent in agents %}
+    {{ agent.name }}_sqr    m_{{ agent.name }}_sqr;
+{% endfor %}
+
+    extern function new(string name, uvm_component parent=null);
+
+endclass
+
+function {{ block_name }}_vsqr::new(string name, uvm_component parent=null);
+    super.new(name, parent);
+endfunction
+
+`endif

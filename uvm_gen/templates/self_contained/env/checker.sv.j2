@@ -1,0 +1,70 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_CHECKER__SV
+`define  {{ block_name | upper }}_CHECKER__SV
+
+class {{ block_name }}_checker extends uvm_scoreboard;
+
+    `uvm_component_utils_begin({{ block_name }}_checker)
+    `uvm_component_utils_end
+
+    int     m_scb_rec_rm_trans_total_cnt;
+    int     m_scb_rec_dut_trans_total_cnt;
+
+    // dec analysis imp — self-contained: receive from rm and agents directly
+{% for agent in agents %}
+    `uvm_analysis_imp_decl(_from_rm_{{ agent.name }})
+    `uvm_analysis_imp_decl(_from_agt_{{ agent.name }})
+    uvm_analysis_imp_from_rm_{{ agent.name }}#(uvm_sequence_item, {{ block_name }}_checker)  m_from_rm_{{ agent.name }}_imp;
+    uvm_analysis_imp_from_agt_{{ agent.name }}#(uvm_sequence_item, {{ block_name }}_checker) m_from_agt_{{ agent.name }}_imp;
+{% endfor %}
+
+    extern function new(string name, uvm_component parent=null);
+    extern virtual function void build_phase(uvm_phase phase);
+    extern virtual task run_phase(uvm_phase phase);
+{% for agent in agents %}
+    extern virtual function void write_from_rm_{{ agent.name }}(uvm_sequence_item tr);
+    extern virtual function void write_from_agt_{{ agent.name }}(uvm_sequence_item tr);
+{% endfor %}
+
+endclass
+
+function {{ block_name }}_checker::new(string name, uvm_component parent=null);
+    super.new(name, parent);
+    m_scb_rec_rm_trans_total_cnt  = 0;
+    m_scb_rec_dut_trans_total_cnt = 0;
+endfunction
+
+function void {{ block_name }}_checker::build_phase(uvm_phase phase);
+    super.build_phase(phase);
+{% for agent in agents %}
+    m_from_rm_{{ agent.name }}_imp  = new("m_from_rm_{{ agent.name }}_imp", this);
+    m_from_agt_{{ agent.name }}_imp = new("m_from_agt_{{ agent.name }}_imp", this);
+{% endfor %}
+endfunction
+
+task {{ block_name }}_checker::run_phase(uvm_phase phase);
+    super.run_phase(phase);
+    `uvm_info(get_full_name(), "checker run_phase start", UVM_NONE);
+endtask
+
+{% for agent in agents %}
+function void {{ block_name }}_checker::write_from_rm_{{ agent.name }}(uvm_sequence_item tr);
+    {{ agent.name }}_trans cast_tr;
+    if(!$cast(cast_tr, tr)) begin
+        `uvm_fatal(get_full_name(), "trans type from rm should be {{ agent.name }}_trans");
+    end
+    m_scb_rec_rm_trans_total_cnt++;
+    // TODO: compare expected vs actual for {{ agent.name }}
+endfunction
+
+function void {{ block_name }}_checker::write_from_agt_{{ agent.name }}(uvm_sequence_item tr);
+    {{ agent.name }}_trans cast_tr;
+    if(!$cast(cast_tr, tr)) begin
+        `uvm_fatal(get_full_name(), "trans type from agt should be {{ agent.name }}_trans");
+    end
+    m_scb_rec_dut_trans_total_cnt++;
+    // TODO: send actual to compare queue for {{ agent.name }}
+endfunction
+
+{% endfor %}
+`endif

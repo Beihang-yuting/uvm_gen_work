@@ -1,0 +1,74 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_RM__SV
+`define  {{ block_name | upper }}_RM__SV
+
+class {{ block_name }}_rm extends uvm_component;
+
+    `uvm_component_utils_begin({{ block_name }}_rm)
+    `uvm_component_utils_end
+
+    // dec common rm member
+
+    // dec in_port — standard: get data from FIFO via uvm_blocking_get_port
+{% for agent in agents %}
+    uvm_blocking_get_port#(uvm_sequence_item)   m_from_{{ agent.name }}_agt_mon_port;
+{% endfor %}
+
+    // dec out_port — send processed transactions to checker via analysis_port
+{% for agent in agents %}
+    uvm_analysis_port#(uvm_sequence_item)       m_rm_{{ agent.name }}_trans_to_scb_port;
+{% endfor %}
+
+    extern function new(string name, uvm_component parent);
+    extern virtual function void build_phase(uvm_phase phase);
+    extern virtual task run_phase(uvm_phase phase);
+{% for agent in agents %}
+    extern virtual task process_trans_from_{{ agent.name }}_agt();
+{% endfor %}
+    extern virtual task fork_rec_trans_task();
+
+endclass
+
+function {{ block_name }}_rm::new(string name, uvm_component parent);
+    super.new(name, parent);
+endfunction
+
+function void {{ block_name }}_rm::build_phase(uvm_phase phase);
+    super.build_phase(phase);
+{% for agent in agents %}
+    m_from_{{ agent.name }}_agt_mon_port     = new("m_from_{{ agent.name }}_agt_mon_port", this);
+    m_rm_{{ agent.name }}_trans_to_scb_port  = new("m_rm_{{ agent.name }}_trans_to_scb_port", this);
+{% endfor %}
+endfunction
+
+task {{ block_name }}_rm::run_phase(uvm_phase phase);
+    fork
+        this.fork_rec_trans_task();
+    join
+endtask
+
+{% for agent in agents %}
+task {{ block_name }}_rm::process_trans_from_{{ agent.name }}_agt();
+    uvm_sequence_item   get_tr;
+    {{ agent.name }}_trans    tr;
+    `uvm_info(get_full_name(), "process_trans_from_{{ agent.name }}_agt start", UVM_NONE);
+    while(1) begin
+        this.m_from_{{ agent.name }}_agt_mon_port.get(get_tr);
+        if(!$cast(tr, get_tr)) begin
+            `uvm_fatal(get_full_name(), $sformatf("trans type should be {{ agent.name }}_trans"));
+        end
+        // TODO: implement reference model logic for {{ agent.name }}
+        m_rm_{{ agent.name }}_trans_to_scb_port.write(tr);
+    end
+endtask
+
+{% endfor %}
+task {{ block_name }}_rm::fork_rec_trans_task();
+    fork
+{% for agent in agents %}
+        this.process_trans_from_{{ agent.name }}_agt();
+{% endfor %}
+    join_none
+endtask
+
+`endif

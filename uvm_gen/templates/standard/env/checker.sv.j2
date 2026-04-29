@@ -1,0 +1,105 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_CHECKER__SV
+`define  {{ block_name | upper }}_CHECKER__SV
+
+class {{ block_name }}_checker extends uvm_scoreboard;
+
+    `uvm_component_utils_begin({{ block_name }}_checker)
+    `uvm_component_utils_end
+
+{% for agent in agents %}
+    int     m_from_rm_{{ agent.name }}_trans_cnt;
+    int     m_from_dut_{{ agent.name }}_trans_cnt;
+{% endfor %}
+    int     m_scb_rec_rm_trans_total_cnt;
+    int     m_scb_rec_dut_trans_total_cnt;
+
+    // dec rm get port — standard: uvm_blocking_get_port connected to FIFO
+{% for agent in agents %}
+    uvm_blocking_get_port#(uvm_sequence_item)   m_from_rm_{{ agent.name }}_trans_port;
+{% endfor %}
+
+    // dec dut get port — standard: uvm_blocking_get_port connected to FIFO
+{% for agent in agents %}
+    uvm_blocking_get_port#(uvm_sequence_item)   m_from_agt_{{ agent.name }}_trans_port;
+{% endfor %}
+
+    extern function new(string name, uvm_component parent=null);
+    extern virtual function void build_phase(uvm_phase phase);
+    extern virtual task run_phase(uvm_phase phase);
+    extern task fork_checker_rec_trans_task();
+{% for agent in agents %}
+    extern task process_{{ agent.name }}_trans_from_rm();
+    extern task process_{{ agent.name }}_trans_from_agt();
+{% endfor %}
+
+endclass
+
+function {{ block_name }}_checker::new(string name, uvm_component parent=null);
+    super.new(name, parent);
+{% for agent in agents %}
+    m_from_rm_{{ agent.name }}_trans_cnt  = 0;
+    m_from_dut_{{ agent.name }}_trans_cnt = 0;
+{% endfor %}
+    m_scb_rec_rm_trans_total_cnt  = 0;
+    m_scb_rec_dut_trans_total_cnt = 0;
+endfunction
+
+function void {{ block_name }}_checker::build_phase(uvm_phase phase);
+    super.build_phase(phase);
+{% for agent in agents %}
+    m_from_rm_{{ agent.name }}_trans_port  = new("m_from_rm_{{ agent.name }}_trans_port", this);
+    m_from_agt_{{ agent.name }}_trans_port = new("m_from_agt_{{ agent.name }}_trans_port", this);
+{% endfor %}
+endfunction
+
+task {{ block_name }}_checker::run_phase(uvm_phase phase);
+    super.run_phase(phase);
+    `uvm_info(get_full_name(), "scb run_phase start", UVM_NONE);
+    fork
+        this.fork_checker_rec_trans_task();
+    join_none
+endtask
+
+{% for agent in agents %}
+task {{ block_name }}_checker::process_{{ agent.name }}_trans_from_rm();
+    {{ agent.name }}_trans     tr;
+    uvm_sequence_item get_{{ agent.name }}_tr;
+    `uvm_info(get_full_name(), $sformatf("process_{{ agent.name }}_trans_from_rm start"), UVM_NONE);
+    while(1) begin
+        this.m_from_rm_{{ agent.name }}_trans_port.get(get_{{ agent.name }}_tr);
+        if(!$cast(tr, get_{{ agent.name }}_tr)) begin
+            `uvm_fatal(get_full_name(), "trans type from rm should be {{ agent.name }}_trans");
+        end
+        this.m_from_rm_{{ agent.name }}_trans_cnt++;
+        this.m_scb_rec_rm_trans_total_cnt++;
+        // TODO: send expected to compare queue for {{ agent.name }}
+    end
+endtask
+
+task {{ block_name }}_checker::process_{{ agent.name }}_trans_from_agt();
+    {{ agent.name }}_trans     tr;
+    uvm_sequence_item get_{{ agent.name }}_tr;
+    `uvm_info(get_full_name(), $sformatf("process_{{ agent.name }}_trans_from_agt start"), UVM_NONE);
+    while(1) begin
+        this.m_from_agt_{{ agent.name }}_trans_port.get(get_{{ agent.name }}_tr);
+        if(!$cast(tr, get_{{ agent.name }}_tr)) begin
+            `uvm_fatal(get_full_name(), "trans type from agt should be {{ agent.name }}_trans");
+        end
+        this.m_from_dut_{{ agent.name }}_trans_cnt++;
+        this.m_scb_rec_dut_trans_total_cnt++;
+        // TODO: send actual to compare queue for {{ agent.name }}
+    end
+endtask
+
+{% endfor %}
+task {{ block_name }}_checker::fork_checker_rec_trans_task();
+    fork
+{% for agent in agents %}
+        this.process_{{ agent.name }}_trans_from_rm();
+        this.process_{{ agent.name }}_trans_from_agt();
+{% endfor %}
+    join_none
+endtask
+
+`endif

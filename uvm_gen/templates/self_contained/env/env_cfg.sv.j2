@@ -1,0 +1,23 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_ENV_CFG__SV
+`define  {{ block_name | upper }}_ENV_CFG__SV
+
+class {{ block_name }}_env_cfg extends uvm_object;
+    `uvm_object_utils_begin({{ block_name }}_env_cfg)
+    `uvm_object_utils_end
+
+    bit     m_quit_cnt_interval;
+{% for agent in agents %}
+    {{ agent.name }}_agt_cfg    m_{{ agent.name }}_agt_cfg;
+{% endfor %}
+
+    function new(string name="{{ block_name }}_env_cfg");
+        super.new(name);
+        this.m_quit_cnt_interval = 0;
+{% for agent in agents %}
+        m_{{ agent.name }}_agt_cfg = new("m_{{ agent.name }}_agt_cfg");
+{% endfor %}
+    endfunction
+endclass
+
+`endif
