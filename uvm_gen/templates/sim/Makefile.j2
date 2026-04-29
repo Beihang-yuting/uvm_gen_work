@@ -1,0 +1,26 @@
+all: clean cmp run
+cmp_run: cmp run
+
+
+tc=tc_sanity
+wave_en=0
+wave=tc_sanity
+info_level=UVM_HIGH
+
+cmp:
+	vcs -full64 -sverilog +incdir+. +define+UVM_NODEPRECATED -timescale=1ns/1ps -lca -kdb -debug_access+all \
+	-cpp g++ -cc gcc -LDFLAGS -Wl,--no-as-needed \
+	-P $(VERDI_HOME)/share/PLI/VCS/LINUX64/novas.tab $(VERDI_HOME)/share/PLI/VCS/LINUX64/pli.a \
+	-ntb_opts uvm-1.1 -F ../cfg/tb.f -l ./log/comp.log
+
+run:
+	./simv +UVM_NO_RELNOTES -l ./log/$(tc).log +UVM_TESTNAME=$(tc) +UVM_VERBOSITY=$(info_level) +wave_en=$(wave_en)
+
+clean:
+	rm -rf comp.log csrc/ *.log novas.conf novas_dump.log novas.fsdb novas.rc simv* simv.daidir/ ucli.key vc_hdr.h verdilog/
+
+clean_all:
+	rm -rf comp.log csrc/ *.log novas.conf novas_dump.log novas.fsdb novas.rc simv* simv.daidir/ ucli.key vc_hdr.h verdilog/ ./log/*.log ./wave/*.fsdb
+
+verdi:
+	verdi -ssf ./wave/$(wave).fsdb -nologo &

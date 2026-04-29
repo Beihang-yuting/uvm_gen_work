@@ -1,0 +1,46 @@
+{{ header(file_name) }}
+`ifndef  HARNESS__SV
+`define  HARNESS__SV
+
+
+module    harness;
+
+//reg clk;
+reg rst_n;
+`CLK_GEN(clk,5,1);
+
+//init dut here
+//xxx_module_top UDT(
+//        .clk(clk),
+//        .rst_n(rst_n)
+//                  };
+
+//dec agt interface here
+{% for agent in agents %}
+    {{ agent.name }}_if               m_{{ agent.name }}_if(clk,rst_n);
+{% endfor %}
+initial begin
+{% for agent in agents %}
+    uvm_config_db#(virtual {{ agent.name }}_if)::set(null,"uvm_test_top.m_env.m_{{ agent.name }}_agt*","m_vif",m_{{ agent.name }}_if);
+{% endfor %}
+end
+
+initial begin
+    run_test();
+end
+
+initial begin
+    bit wave_enable;
+    string tc_name;
+    if($value$plusargs("wave_en=%0b",wave_enable)) begin
+        if(wave_enable == 1) begin
+            $value$plusargs("UVM_TESTNAME=%s",tc_name);
+            $display("start to dump %s wave at time=%0t",tc_name,$time);
+            $fsdbDumpfile($sformatf("./wave/%s.fsdb",tc_name));
+            $fsdbDumpvars();
+        end
+    end
+end
+
+endmodule
+`endif

@@ -1,0 +1,11 @@
+-F  ../common/common_lib_pkg.f
+{% for agent in agents %}
+-F  ../agents/{{ agent.name }}_agent/{{ agent.name }}_agent.f
+{% endfor %}
+../env/{{ block_name }}_vsqr.sv
+../env/{{ block_name }}_rm.sv
+../env/{{ block_name }}_checker.sv
+../env/{{ block_name }}_env_cfg.sv
+../env/{{ block_name }}_env.sv
+../harness/harness.sv
+-f ../tc/tc.f
