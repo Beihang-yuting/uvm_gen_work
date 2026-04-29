@@ -1,5 +1,5 @@
 import pytest
-from uvm_gen.config import PlatformType, AgentMode, AgentConfig, ProjectConfig
+from uvm_gen.config import PlatformType, AgentConfig, ProjectConfig
 
 
 def test_platform_type_values():
@@ -7,18 +7,9 @@ def test_platform_type_values():
     assert PlatformType.STANDARD.value == "standard"
 
 
-def test_agent_mode_values():
-    assert AgentMode.MASTER.value == "master"
-    assert AgentMode.SLAVE.value == "slave"
-    assert AgentMode.ONLY_MASTER.value == "only-master"
-    assert AgentMode.ONLY_SLAVE.value == "only-slave"
-    assert AgentMode.ONLY_MONITOR.value == "only-monitor"
-
-
 def test_agent_config_defaults():
     cfg = AgentConfig(name="axi")
     assert cfg.name == "axi"
-    assert cfg.mode == AgentMode.MASTER
 
 
 def test_project_config_defaults():
@@ -39,13 +30,13 @@ def test_project_config_with_agents():
         block_name="top",
         platform_type=PlatformType.STANDARD,
         agents=[
-            AgentConfig(name="axi", mode=AgentMode.MASTER),
-            AgentConfig(name="apb", mode=AgentMode.SLAVE),
+            AgentConfig(name="axi"),
+            AgentConfig(name="apb"),
         ],
     )
     assert len(cfg.agents) == 2
     assert cfg.agents[0].name == "axi"
-    assert cfg.agents[1].mode == AgentMode.SLAVE
+    assert cfg.agents[1].name == "apb"
     assert cfg.platform_type == PlatformType.STANDARD
 
 
@@ -57,9 +48,7 @@ block: top
 type: self-contained
 agents:
   - name: axi
-    mode: master
   - name: apb
-    mode: slave
 """
     cfg = ProjectConfig.from_yaml(yaml_str)
     assert cfg.project_name == "bootis"
@@ -67,7 +56,7 @@ agents:
     assert cfg.block_name == "top"
     assert cfg.platform_type == PlatformType.SELF_CONTAINED
     assert len(cfg.agents) == 2
-    assert cfg.agents[0].mode == AgentMode.MASTER
+    assert cfg.agents[0].name == "axi"
 
 
 def test_project_config_from_yaml_standard():
@@ -78,8 +67,7 @@ block: sub
 type: standard
 agents:
   - name: pcie
-    mode: only-monitor
 """
     cfg = ProjectConfig.from_yaml(yaml_str)
     assert cfg.platform_type == PlatformType.STANDARD
-    assert cfg.agents[0].mode == AgentMode.ONLY_MONITOR
+    assert cfg.agents[0].name == "pcie"

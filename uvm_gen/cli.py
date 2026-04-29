@@ -1,7 +1,7 @@
 from __future__ import annotations
 import argparse
 import sys
-from uvm_gen.config import AgentConfig, AgentMode, PlatformType, ProjectConfig
+from uvm_gen.config import AgentConfig, PlatformType, ProjectConfig
 from uvm_gen.generators.agent import AgentGenerator
 from uvm_gen.generators.platform import PlatformGenerator
 
@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_platform = subparsers.add_parser("platform", help="Generate full UVM platform")
     p_platform.add_argument("--type", required=True, choices=["self-contained", "standard"])
     p_platform.add_argument("--block", required=True)
-    p_platform.add_argument("--agents", required=True, help='e.g. "axi:master,apb:slave"')
+    p_platform.add_argument("--agents", required=True, help='e.g. "axi,apb,pcie"')
     p_platform.add_argument("--author", required=True)
     p_platform.add_argument("--project", required=True)
     p_platform.add_argument("--output", default=".")
@@ -21,8 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent = subparsers.add_parser("agent", help="Generate standalone agent")
     p_agent.add_argument("--type", required=True, choices=["self-contained", "standard"])
     p_agent.add_argument("--name", required=True)
-    p_agent.add_argument("--mode", required=True,
-                         choices=["master", "slave", "only-master", "only-slave", "only-monitor"])
     p_agent.add_argument("--author", required=True)
     p_agent.add_argument("--project", required=True)
     p_agent.add_argument("--output", default=".")
@@ -30,11 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_agents_string(agents_str: str) -> list[AgentConfig]:
     agents = []
-    for pair in agents_str.split(","):
-        parts = pair.strip().split(":")
-        name = parts[0]
-        mode = AgentMode(parts[1]) if len(parts) > 1 else AgentMode.MASTER
-        agents.append(AgentConfig(name=name, mode=mode))
+    for name in agents_str.split(","):
+        name = name.strip()
+        if name:
+            agents.append(AgentConfig(name=name))
     return agents
 
 def run_from_args(args: argparse.Namespace) -> None:
@@ -54,7 +51,7 @@ def run_from_args(args: argparse.Namespace) -> None:
         project_dir = gen.generate()
         print(f"Platform generated: {project_dir}")
     elif args.command == "agent":
-        agent_cfg = AgentConfig(name=args.name, mode=AgentMode(args.mode))
+        agent_cfg = AgentConfig(name=args.name)
         cfg = ProjectConfig(project_name=args.project, author=args.author, block_name="",
             platform_type=PlatformType(args.type), agents=[agent_cfg])
         gen = AgentGenerator(cfg)
@@ -81,7 +78,7 @@ def interactive_mode() -> None:
     author = input("Author: ").strip()
     if choice == "1":
         block = input("Block name: ").strip()
-        agents_str = input('Agents (e.g. "axi:master,apb:slave"): ').strip()
+        agents_str = input('Agents (e.g. "axi,apb,pcie"): ').strip()
         output = input("Output directory [.]: ").strip() or "."
         agents = parse_agents_string(agents_str)
         cfg = ProjectConfig(project_name=project, author=author, block_name=block,
@@ -90,9 +87,8 @@ def interactive_mode() -> None:
         print(f"\nPlatform generated: {gen.generate()}")
     elif choice == "2":
         name = input("Agent name: ").strip()
-        mode = input("Mode [master]: ").strip() or "master"
         output = input("Output directory [.]: ").strip() or "."
-        agent_cfg = AgentConfig(name=name, mode=AgentMode(mode))
+        agent_cfg = AgentConfig(name=name)
         cfg = ProjectConfig(project_name=project, author=author, block_name="",
             platform_type=platform_type, agents=[agent_cfg])
         AgentGenerator(cfg).generate_agent(agent_cfg, output)

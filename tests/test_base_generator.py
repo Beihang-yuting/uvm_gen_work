@@ -2,7 +2,7 @@ import os
 import tempfile
 
 import pytest
-from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig, AgentMode
+from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig
 from uvm_gen.generators.base import BaseGenerator
 
 
@@ -13,7 +13,7 @@ def project_cfg():
         author="ryan.yu",
         block_name="top",
         platform_type=PlatformType.SELF_CONTAINED,
-        agents=[AgentConfig(name="axi", mode=AgentMode.MASTER)],
+        agents=[AgentConfig(name="axi")],
     )
 
 

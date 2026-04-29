@@ -1,23 +1,23 @@
 import os
 import tempfile
 import pytest
-from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig, AgentMode
+from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig
 from uvm_gen.generators.platform import PlatformGenerator
 
 @pytest.fixture
 def sc_three_agents():
     return ProjectConfig(project_name="chip_a", author="engineer", block_name="top",
         platform_type=PlatformType.SELF_CONTAINED,
-        agents=[AgentConfig(name="axi", mode=AgentMode.MASTER),
-                AgentConfig(name="apb", mode=AgentMode.SLAVE),
-                AgentConfig(name="pcie", mode=AgentMode.ONLY_MONITOR)])
+        agents=[AgentConfig(name="axi"),
+                AgentConfig(name="apb"),
+                AgentConfig(name="pcie")])
 
 @pytest.fixture
 def std_two_agents():
     return ProjectConfig(project_name="chip_b", author="engineer", block_name="sub",
         platform_type=PlatformType.STANDARD,
-        agents=[AgentConfig(name="spi", mode=AgentMode.MASTER),
-                AgentConfig(name="uart", mode=AgentMode.SLAVE)])
+        agents=[AgentConfig(name="spi"),
+                AgentConfig(name="uart")])
 
 def test_sc_full_generation(sc_three_agents):
     """Self-contained platform with 3 agents generates complete structure."""

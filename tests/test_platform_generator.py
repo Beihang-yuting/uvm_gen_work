@@ -1,21 +1,21 @@
 import os
 import tempfile
 import pytest
-from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig, AgentMode
+from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig
 from uvm_gen.generators.platform import PlatformGenerator
 
 @pytest.fixture
 def sc_cfg():
     return ProjectConfig(project_name="bootis", author="ryan.yu", block_name="top",
         platform_type=PlatformType.SELF_CONTAINED,
-        agents=[AgentConfig(name="axi", mode=AgentMode.MASTER),
-                AgentConfig(name="apb", mode=AgentMode.SLAVE)])
+        agents=[AgentConfig(name="axi"),
+                AgentConfig(name="apb")])
 
 @pytest.fixture
 def std_cfg():
     return ProjectConfig(project_name="bootis", author="ryan.yu", block_name="top",
         platform_type=PlatformType.STANDARD,
-        agents=[AgentConfig(name="axi", mode=AgentMode.MASTER)])
+        agents=[AgentConfig(name="axi")])
 
 def test_sc_platform_full_structure(sc_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:

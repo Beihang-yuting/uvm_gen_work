@@ -1,7 +1,7 @@
 import os
 import tempfile
 import pytest
-from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig, AgentMode
+from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig
 from uvm_gen.generators.env import EnvGenerator
 
 
@@ -13,8 +13,8 @@ def sc_cfg():
         block_name="top",
         platform_type=PlatformType.SELF_CONTAINED,
         agents=[
-            AgentConfig(name="axi", mode=AgentMode.MASTER),
-            AgentConfig(name="apb", mode=AgentMode.SLAVE),
+            AgentConfig(name="axi"),
+            AgentConfig(name="apb"),
         ],
     )
 
@@ -27,8 +27,8 @@ def std_cfg():
         block_name="top",
         platform_type=PlatformType.STANDARD,
         agents=[
-            AgentConfig(name="axi", mode=AgentMode.MASTER),
-            AgentConfig(name="apb", mode=AgentMode.SLAVE),
+            AgentConfig(name="axi"),
+            AgentConfig(name="apb"),
         ],
     )
 

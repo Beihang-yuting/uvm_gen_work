@@ -12,18 +12,9 @@ class PlatformType(Enum):
     STANDARD = "standard"
 
 
-class AgentMode(Enum):
-    MASTER = "master"
-    SLAVE = "slave"
-    ONLY_MASTER = "only-master"
-    ONLY_SLAVE = "only-slave"
-    ONLY_MONITOR = "only-monitor"
-
-
 @dataclass
 class AgentConfig:
     name: str
-    mode: AgentMode = AgentMode.MASTER
 
 
 @dataclass
@@ -40,10 +31,8 @@ class ProjectConfig:
         data = yaml.safe_load(yaml_str)
         agents = []
         for a in data.get("agents", []):
-            agents.append(AgentConfig(
-                name=a["name"],
-                mode=AgentMode(a.get("mode", "master")),
-            ))
+            name = a if isinstance(a, str) else a["name"]
+            agents.append(AgentConfig(name=name))
         return cls(
             project_name=data["project"],
             author=data["author"],
