@@ -28,7 +28,7 @@ class BaseGenerator:
     def render_header(self, file_name: str) -> str:
         tmpl = self.jinja_env.get_template("_header.sv.j2")
         return tmpl.render(
-            project_name=self.cfg.project_name,
+            project_name=self.cfg.block_name,
             author=self.cfg.author,
             date=time.strftime("%Y-%m-%d %X"),
             file_name=file_name,
@@ -37,7 +37,6 @@ class BaseGenerator:
     def render_template(self, template_path: str, **kwargs) -> str:
         tmpl = self.jinja_env.get_template(template_path)
         return tmpl.render(
-            project_name=self.cfg.project_name,
             author=self.cfg.author,
             block_name=self.cfg.block_name,
             date=time.strftime("%Y-%m-%d %X"),
@@ -46,12 +45,12 @@ class BaseGenerator:
         )
 
     def get_template_path(self, category: str, template_name: str) -> str:
-        if category in ("common", "harness", "tc", "cfg", "sim"):
+        if category in ("common", "harness", "tc", "cfg"):
             return f"{category}/{template_name}"
         type_dir = (
-            "self_contained"
-            if self.cfg.platform_type == PlatformType.SELF_CONTAINED
-            else "standard"
+            "advance"
+            if self.cfg.platform_type == PlatformType.ADVANCE
+            else "port"
         )
         return f"{type_dir}/{category}/{template_name}"
 

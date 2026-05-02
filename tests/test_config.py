@@ -3,8 +3,8 @@ from uvm_gen.config import PlatformType, AgentConfig, ProjectConfig
 
 
 def test_platform_type_values():
-    assert PlatformType.SELF_CONTAINED.value == "self-contained"
-    assert PlatformType.STANDARD.value == "standard"
+    assert PlatformType.ADVANCE.value == "advance"
+    assert PlatformType.PORT.value == "port"
 
 
 def test_agent_config_defaults():
@@ -13,61 +13,50 @@ def test_agent_config_defaults():
 
 
 def test_project_config_defaults():
-    cfg = ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
-        block_name="top",
-    )
-    assert cfg.platform_type == PlatformType.SELF_CONTAINED
+    cfg = ProjectConfig(block_name="top")
+    assert cfg.platform_type == PlatformType.ADVANCE
     assert cfg.agents == []
     assert cfg.output_dir is None
+    assert cfg.author != ""
 
 
 def test_project_config_with_agents():
     cfg = ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
         block_name="top",
-        platform_type=PlatformType.STANDARD,
-        agents=[
-            AgentConfig(name="axi"),
-            AgentConfig(name="apb"),
-        ],
+        platform_type=PlatformType.PORT,
+        agents=[AgentConfig(name="axi"), AgentConfig(name="apb")],
     )
     assert len(cfg.agents) == 2
     assert cfg.agents[0].name == "axi"
-    assert cfg.agents[1].name == "apb"
-    assert cfg.platform_type == PlatformType.STANDARD
+    assert cfg.platform_type == PlatformType.PORT
 
 
 def test_project_config_from_yaml():
     yaml_str = """
-project: bootis
-author: ryan.yu
 block: top
-type: self-contained
+type: advance
 agents:
   - name: axi
   - name: apb
 """
     cfg = ProjectConfig.from_yaml(yaml_str)
-    assert cfg.project_name == "bootis"
-    assert cfg.author == "ryan.yu"
     assert cfg.block_name == "top"
-    assert cfg.platform_type == PlatformType.SELF_CONTAINED
+    assert cfg.platform_type == PlatformType.ADVANCE
     assert len(cfg.agents) == 2
-    assert cfg.agents[0].name == "axi"
 
 
-def test_project_config_from_yaml_standard():
+def test_project_config_from_yaml_port():
     yaml_str = """
-project: chip_a
-author: test
 block: sub
-type: standard
+type: port
 agents:
   - name: pcie
 """
     cfg = ProjectConfig.from_yaml(yaml_str)
-    assert cfg.platform_type == PlatformType.STANDARD
+    assert cfg.platform_type == PlatformType.PORT
     assert cfg.agents[0].name == "pcie"
+
+
+def test_project_config_from_yaml_missing_block():
+    with pytest.raises(ValueError, match="missing required field 'block'"):
+        ProjectConfig.from_yaml("agents:\n  - name: axi\n")

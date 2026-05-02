@@ -15,12 +15,12 @@ class new_scb_demo_trans extends uvm_object;
 endclass
 
 
-typedef enum {ORDER_CMP_WITHOUT_LOSS,ORDER_CMP_WITH_LOSS,DISSORDER_CMP} scb_cmp_mode;
+typedef enum {ORDER_CMP_WITHOUT_LOSS,ORDER_CMP_WITH_LOSS,DISORDER_CMP} scb_cmp_mode;
 
 class common_uvm_scb_cfg extends uvm_object;
     scb_cmp_mode          m_cmp_mode;
     bit                   m_allow_dut_faster_en;
-    int                   m_err_print_threadhold;
+    int                   m_err_print_threshold;
     int                   m_cmp_pass_print_interval;
     bit                   m_report_info_en;
     bit                   m_report_stream_en;
@@ -28,7 +28,7 @@ class common_uvm_scb_cfg extends uvm_object;
     `uvm_object_utils_begin(common_uvm_scb_cfg)
         `uvm_field_enum(scb_cmp_mode,m_cmp_mode,UVM_ALL_ON)
         `uvm_field_int(m_allow_dut_faster_en,UVM_ALL_ON)
-        `uvm_field_int(m_err_print_threadhold,UVM_ALL_ON)
+        `uvm_field_int(m_err_print_threshold,UVM_ALL_ON)
         `uvm_field_int(m_cmp_pass_print_interval,UVM_ALL_ON)
         `uvm_field_int(m_report_info_en,UVM_ALL_ON)
         `uvm_field_int(m_report_stream_en,UVM_ALL_ON)
@@ -36,9 +36,9 @@ class common_uvm_scb_cfg extends uvm_object;
 
     function new (string name = "common_uvm_scb_cfg");
         super.new(name);
-        this.m_cmp_mode                = DISSORDER_CMP;
+        this.m_cmp_mode                = DISORDER_CMP;
         this.m_allow_dut_faster_en     = 0;
-        this.m_err_print_threadhold    = 3;
+        this.m_err_print_threshold    = 3;
         this.m_cmp_pass_print_interval = 100;
         this.m_report_info_en          = 1;
         this.m_report_stream_en        = 1;
@@ -85,7 +85,7 @@ class stream_trans_manager#(parameter type TRANS_TYPE = new_scb_demo_trans,param
 
     function string gen_report_info();
         string ret_str;
-        ret_str = $sformatf("0x%0h %0d %0d %0d %0d %0d",m_stream_id,m_match_pair_cnt,m_get_rm_trans_cnt,m_get_dut_trans_cnt,m_rm_trans_q.size(),m_dut_trans_q.size());
+        ret_str = $sformatf("0x%0h %0d %0d %0d %0d %0d %0d %0d",m_stream_id,m_match_pair_cnt,m_get_rm_trans_cnt,m_get_dut_trans_cnt,m_rm_trans_q.size(),m_dut_trans_q.size(),m_not_match_pair_cnt,m_with_loss_dut_drop_cnt);
         return ret_str;
     endfunction
 
@@ -96,6 +96,7 @@ class common_uvm_scb#(parameter type TRANS_TYPE = new_scb_demo_trans,parameter s
     int                   m_total_match_pair_cnt;
     int                   m_get_rm_trans_cnt;
     int                   m_get_dut_trans_cnt;
+    int                   m_total_suppressed_err_cnt;
     stream_trans_manager#(TRANS_TYPE,stream_id_len)   m_trans_array[bit[stream_id_len-1:0]];
 
     `uvm_component_param_utils_begin(common_uvm_scb#(TRANS_TYPE,stream_id_len))
@@ -134,6 +135,7 @@ function common_uvm_scb::new(string name="common_uvm_scb",uvm_component parent=n
     this.m_total_match_pair_cnt = 0;
     this.m_get_rm_trans_cnt = 0;
     this.m_get_dut_trans_cnt = 0;
+    this.m_total_suppressed_err_cnt = 0;
 endfunction:new
 
 task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
@@ -157,7 +159,7 @@ task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0
     if(m_cfg.m_cmp_mode == ORDER_CMP_WITHOUT_LOSS) begin
         if(m_cfg.m_allow_dut_faster_en == 0) begin
             if(m_trans_array[stream_id].m_dut_trans_q.size()>0) begin
-                `uvm_error(get_full_name,"ORDER_CMP_WITH_LOSS,dut_faster_en=1 when rm pkt comes,dut_q size should be empty, maybe dut send pkt faster than rm or rm ont send the pkt to scb");
+                `uvm_error(get_full_name,"ORDER_CMP_WITHOUT_LOSS,dut_faster_en=0 when rm pkt comes,dut_q size should be empty, maybe dut send pkt faster than rm or rm ont send the pkt to scb");
             end
             m_trans_array[stream_id].m_rm_trans_q.push_back(rm_tr);
         end
@@ -166,6 +168,8 @@ task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0
                 dut_tr = m_trans_array[stream_id].m_dut_trans_q.pop_front();
                 if(!rm_tr.self_define_do_compare(dut_tr,diff,kind)) begin
                     this.cmp_not_pass_action(stream_id,diff);
+                    m_trans_array[stream_id].m_dut_find_not_match_q.push_back(dut_tr);
+                    m_trans_array[stream_id].m_not_match_pair_cnt++;
                 end
                 else begin
                     this.cmp_pass_action(rm_tr,dut_tr,stream_id,kind);
@@ -179,7 +183,7 @@ task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0
     else if(m_cfg.m_cmp_mode == ORDER_CMP_WITH_LOSS) begin
         this.cmp_order_with_loss_rm_trans(rm_tr,stream_id,kind);
     end
-    else if(m_cfg.m_cmp_mode == DISSORDER_CMP) begin
+    else if(m_cfg.m_cmp_mode == DISORDER_CMP) begin
         q_size = m_trans_array[stream_id].m_dut_trans_q.size();
         if(q_size>0) begin
             find_match_flag = 1'b0;
@@ -298,7 +302,7 @@ task common_uvm_scb::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,bit[stream_id_len-1
                 end
             end
             else begin
-                `uvm_error(get_full_name,"ORDER_CMP_WITH_LOSS,dut_faster_en=0 when dut pkt comes,rm_q size should not be empty, maybe dut send pkt faster than rm or rm ont send the pkt to scb");
+                `uvm_error(get_full_name,"ORDER_CMP_WITHOUT_LOSS,dut_faster_en=0 when dut pkt comes,rm_q size should not be empty, maybe dut send pkt faster than rm or rm ont send the pkt to scb");
                 dut_tr.print();
                 this.m_trans_array[stream_id].m_dut_find_not_match_q.push_back(dut_tr);
             end
@@ -321,7 +325,7 @@ task common_uvm_scb::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,bit[stream_id_len-1
     else if(m_cfg.m_cmp_mode == ORDER_CMP_WITH_LOSS) begin
         this.cmp_order_with_loss_dut_trans(dut_tr,stream_id,kind);
     end
-    else if(m_cfg.m_cmp_mode == DISSORDER_CMP) begin
+    else if(m_cfg.m_cmp_mode == DISORDER_CMP) begin
         q_size = m_trans_array[stream_id].m_rm_trans_q.size();
         if(q_size>0) begin
             find_match_flag = 1'b0;
@@ -387,7 +391,6 @@ task common_uvm_scb::cmp_order_with_loss_dut_trans(TRANS_TYPE dut_tr,bit[stream_
             for(i=0;i<m_trans_array[stream_id].m_rm_trans_q.size;i++) begin
                 m_trans_array[stream_id].m_rm_trans_q[i].print();
             end
-            m_trans_array[stream_id].m_with_loss_dut_drop_cnt = m_trans_array[stream_id].m_with_loss_dut_drop_cnt-1;
             m_trans_array[stream_id].m_not_match_pair_cnt++;
         end
     end
@@ -459,10 +462,13 @@ task common_uvm_scb::action_when_cmp_pass(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,bit
 endtask
 
 task common_uvm_scb::cmp_not_pass_action(bit[stream_id_len-1:0] stream_id,string diff);
-    if(this.m_trans_array[stream_id].m_print_err_cnt<this.m_cfg.m_err_print_threadhold) begin
+    if(this.m_trans_array[stream_id].m_print_err_cnt<this.m_cfg.m_err_print_threshold) begin
         this.m_trans_array[stream_id].m_print_err_cnt++;
         `uvm_error(get_full_name,"scb cmp not pass");
         $display("%s",diff);
+    end
+    else begin
+        this.m_total_suppressed_err_cnt++;
     end
 endtask
 
@@ -495,7 +501,7 @@ function void common_uvm_scb::report_info();
     draw_inst = new();
     draw_inst.insert_line_content($sformatf("%s_info_summary",get_name));
     if(this.m_cfg.m_report_stream_en == 1) begin
-        draw_inst.insert_line_content("stream_id match_cnt get_rm_trans_cnt get_dut_trans_cnt remain_rm_trans_cnt remain_dut_trans_cnt");
+        draw_inst.insert_line_content("stream_id match_cnt get_rm_cnt get_dut_cnt remain_rm remain_dut not_match drop_cnt");
         foreach(this.m_trans_array[i]) begin
             draw_inst.insert_line_content(this.m_trans_array[i].gen_report_info());
         end
@@ -516,9 +522,14 @@ function void common_uvm_scb::queue_status_chk();
         not_match_pair_cnt        = this.m_trans_array[i].m_not_match_pair_cnt;
         total_cnt                 = dut_cnt + rm_cnt + dut_find_not_match_cnt + not_match_pair_cnt;
         total_except_dut_drop_cnt = dut_cnt + dut_find_not_match_cnt + not_match_pair_cnt;
-        if((m_cfg.m_cmp_mode == ORDER_CMP_WITH_LOSS) || (m_cfg.m_cmp_mode == DISSORDER_CMP)) begin
+        if((m_cfg.m_cmp_mode == ORDER_CMP_WITH_LOSS) || (m_cfg.m_cmp_mode == DISORDER_CMP)) begin
             if(total_cnt != 0) begin
-                `uvm_error(get_full_name,$sformatf("cmp_mode=%s stream_id=0x%0h dut_q.size=%0d rm_q.size=%0d dut_find_not_match_q.size=%0d m_not_match_pair_cnt=%0d should all be 0.",m_cfg.m_cmp_mode.name(),i,dut_cnt,rm_cnt,dut_find_not_match_cnt,not_match_pair_cnt));
+                if((m_cfg.m_cmp_mode == ORDER_CMP_WITH_LOSS) && (dut_cnt == 0) && (dut_find_not_match_cnt == 0) && (not_match_pair_cnt == 0) && (rm_cnt > 0)) begin
+                    `uvm_warning(get_full_name,$sformatf("cmp_mode=%s stream_id=0x%0h rm_q.size=%0d residual rm entries (possible lost dut packets).",m_cfg.m_cmp_mode.name(),i,rm_cnt));
+                end
+                else begin
+                    `uvm_error(get_full_name,$sformatf("cmp_mode=%s stream_id=0x%0h dut_q.size=%0d rm_q.size=%0d dut_find_not_match_q.size=%0d m_not_match_pair_cnt=%0d should all be 0.",m_cfg.m_cmp_mode.name(),i,dut_cnt,rm_cnt,dut_find_not_match_cnt,not_match_pair_cnt));
+                end
             end
         end
         else begin
@@ -536,6 +547,9 @@ function void common_uvm_scb::report_phase(uvm_phase phase);
     end
     else begin
         `uvm_info(get_full_name,$sformatf("m_report_info_en=0,not report info"),UVM_NONE);
+    end
+    if(this.m_total_suppressed_err_cnt > 0) begin
+        `uvm_warning(get_full_name,$sformatf("%0d comparison errors suppressed (threshold=%0d)",m_total_suppressed_err_cnt,m_cfg.m_err_print_threshold))
     end
     this.queue_status_chk();
 endfunction
@@ -601,10 +615,10 @@ function string common_uvm_scb::gen_report_info(bit report_in_env=0);
     end
 
     if(report_in_env ==0) begin
-        ret_str = $sformatf("total_streams %0d %0d %0d %0d %0d",total_match_pair_cnt,m_get_rm_trans_cnt,m_get_dut_trans_cnt,total_rm_trans_q_size,total_dut_trans_q_size);
+        ret_str = $sformatf("%s total_streams %0d %0d %0d %0d %0d %0d %0d",get_name,total_match_pair_cnt,m_get_rm_trans_cnt,m_get_dut_trans_cnt,total_rm_trans_q_size,total_dut_trans_q_size,total_not_match_pair_cnt,total_with_loss_dut_drop_cnt);
     end
     else begin
-        ret_str = $sformatf("total_streams %0d %0d %0d %0d %0d",total_match_pair_cnt,m_get_rm_trans_cnt,m_get_dut_trans_cnt,total_rm_trans_q_size,total_dut_trans_q_size);
+        ret_str = $sformatf("total_streams %0d %0d %0d %0d %0d %0d %0d",total_match_pair_cnt,m_get_rm_trans_cnt,m_get_dut_trans_cnt,total_rm_trans_q_size,total_dut_trans_q_size,total_not_match_pair_cnt,total_with_loss_dut_drop_cnt);
     end
     return ret_str;
 endfunction

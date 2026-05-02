@@ -39,3 +39,34 @@ class AgentGenerator(BaseGenerator):
         template_path = self.get_template_path("agent", "agent_f.j2")
         f_content = self.render_template(template_path, file_name=f"{name}_agent.f", **ctx)
         self.write_file(os.path.join(agent_dir, f"{name}_agent.f"), f_content)
+
+        self.generate_test_env(agent_cfg, agent_dir)
+
+    def generate_test_env(self, agent_cfg: AgentConfig, agent_dir: str) -> None:
+        name = agent_cfg.name
+        test_env_dir = os.path.join(agent_dir, "test_env")
+        os.makedirs(test_env_dir, exist_ok=True)
+
+        ctx = {
+            "name": name,
+            "name_upper": name.upper(),
+            "agents": [agent_cfg],
+        }
+
+        templates = [
+            ("test_env.sv.j2", f"{name}_test_env.sv"),
+            ("test_env_cfg.sv.j2", f"{name}_test_env_cfg.sv"),
+            ("test_harness.sv.j2", f"{name}_test_harness.sv"),
+            ("base_test.sv.j2", f"{name}_base_test.sv"),
+        ]
+        for tpl_name, out_name in templates:
+            template_path = self.get_template_path("test_env", tpl_name)
+            content = self.render_template(template_path, file_name=out_name, **ctx)
+            self.write_file(os.path.join(test_env_dir, out_name), content)
+
+        cfg_dir = os.path.join(test_env_dir, "cfg")
+        os.makedirs(cfg_dir, exist_ok=True)
+        for tpl_name, out_name in [("tb_f.j2", "tb.f"), ("env_f.j2", "env.f")]:
+            template_path = self.get_template_path("test_env", tpl_name)
+            content = self.render_template(template_path, file_name=out_name, **ctx)
+            self.write_file(os.path.join(cfg_dir, out_name), content)

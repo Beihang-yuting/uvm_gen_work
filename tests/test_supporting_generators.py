@@ -9,10 +9,9 @@ from uvm_gen.generators.testcase import TestcaseGenerator
 @pytest.fixture
 def cfg():
     return ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
         block_name="top",
-        platform_type=PlatformType.SELF_CONTAINED,
+        author="ryan.yu",
+        platform_type=PlatformType.ADVANCE,
         agents=[
             AgentConfig(name="axi"),
             AgentConfig(name="apb"),

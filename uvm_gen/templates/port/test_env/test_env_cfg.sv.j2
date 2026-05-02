@@ -1,0 +1,18 @@
+{{ header(file_name) }}
+`ifndef  {{ name | upper }}_TEST_ENV_CFG__SV
+`define  {{ name | upper }}_TEST_ENV_CFG__SV
+
+
+class {{ name }}_test_env_cfg extends uvm_object;
+    `uvm_object_utils({{ name }}_test_env_cfg)
+
+    {{ name }}_agt_cfg    m_{{ name }}_agt_cfg;
+
+    function new(string name = "{{ name }}_test_env_cfg");
+        super.new(name);
+        m_{{ name }}_agt_cfg = {{ name }}_agt_cfg::type_id::create("m_{{ name }}_agt_cfg");
+    endfunction
+
+endclass
+
+`endif

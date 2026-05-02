@@ -1,0 +1,33 @@
+{{ header(file_name) }}
+`ifndef  {{ name | upper }}_BASE_TEST__SV
+`define  {{ name | upper }}_BASE_TEST__SV
+
+
+class {{ name }}_base_test extends uvm_test;
+    `uvm_component_utils({{ name }}_base_test)
+
+    {{ name }}_test_env       m_env;
+    {{ name }}_test_env_cfg   m_env_cfg;
+
+    function new(string name = "{{ name }}_base_test", uvm_component parent = null);
+        super.new(name, parent);
+    endfunction
+
+    function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        m_env_cfg = {{ name }}_test_env_cfg::type_id::create("m_env_cfg");
+        m_env = {{ name }}_test_env::type_id::create("m_env", this);
+        m_env.m_cfg = m_env_cfg;
+    endfunction
+
+    task run_phase(uvm_phase phase);
+        super.run_phase(phase);
+        phase.raise_objection(this);
+        `uvm_info(get_type_name, "{{ name }}_base_test run_phase started", UVM_NONE)
+        #100ns;
+        phase.drop_objection(this);
+    endtask
+
+endclass
+
+`endif

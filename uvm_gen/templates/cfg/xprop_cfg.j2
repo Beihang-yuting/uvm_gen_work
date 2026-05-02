@@ -1,0 +1,85 @@
+//===============================================================
+// VCS Xprop Configuration File
+// Usage: vcs -xprop=tmerge,xprop.cfg  (or -xprop=xmerge,xprop.cfg)
+//
+// Xprop modes:
+//   tmerge  - Most conservative, best for RTL verification (recommended)
+//   xmerge  - Moderate, good balance of accuracy and performance
+//   vmerge  - Least conservative, closest to Verilog semantics
+//===============================================================
+
+//---------------------------------------------------------------
+// Module-level xprop mode assignment
+// Syntax: module <module_name> { xpropMode = tmerge|xmerge|vmerge; };
+//---------------------------------------------------------------
+
+// Apply tmerge to the entire DUT (recommended default):
+// module {{ block_name }}_top { xpropMode = tmerge; };
+
+//---------------------------------------------------------------
+// Instance-level xprop mode
+// Syntax: instance <hier_path> { xpropMode = tmerge|xmerge|vmerge; };
+//---------------------------------------------------------------
+// Apply xmerge to a specific instance:
+// instance tb.u_dut.u_mem_ctrl { xpropMode = xmerge; };
+//
+// Apply vmerge to clock domain crossing logic:
+// instance tb.u_dut.u_cdc_sync { xpropMode = vmerge; };
+
+//---------------------------------------------------------------
+// Exclude modules from xprop analysis
+// Syntax: module <module_name> { xpropOff; };
+//         instance <hier_path> { xpropOff; };
+//---------------------------------------------------------------
+// Exclude third-party IP:
+// module pll_ip { xpropOff; };
+// module sram_model { xpropOff; };
+//
+// Exclude specific instance:
+// instance tb.u_dut.u_analog_ip { xpropOff; };
+
+//---------------------------------------------------------------
+// Signal-level control
+// Syntax: module <module_name> { xpropOffSignal = <signal_name>; };
+//---------------------------------------------------------------
+// Exclude specific signals from xprop:
+// module dut_top {
+//     xpropOffSignal = scan_mode;
+//     xpropOffSignal = test_en;
+//     xpropOffSignal = jtag_tdi;
+// };
+
+//---------------------------------------------------------------
+// Process-level control (if/case/always)
+// Syntax: module <module_name> { xpropOffProcess = <label>; };
+//---------------------------------------------------------------
+// Exclude a labeled process:
+// module dut_top { xpropOffProcess = legacy_decoder; };
+
+//---------------------------------------------------------------
+// Xprop with gate-level simulation
+// For gate-level sims, vmerge is typically more appropriate:
+//---------------------------------------------------------------
+// module gate_level_netlist { xpropMode = vmerge; };
+
+//---------------------------------------------------------------
+// Conditional X assignments
+// xpropCondOff: disable xprop for conditional assignments (if/case)
+// xpropCondOn:  enable xprop for conditional assignments (default)
+//---------------------------------------------------------------
+// module dut_top { xpropCondOff; };
+
+//---------------------------------------------------------------
+// Xprop for multidriven signals
+// xpropMultidriven: enable xprop for multidriven nets
+//---------------------------------------------------------------
+// module dut_top { xpropMultidriven; };
+
+//---------------------------------------------------------------
+// Report configuration
+// Generate xprop analysis report:
+//   vcs -xprop=tmerge,xprop.cfg -xprop_report
+//
+// Detailed report with signal-level info:
+//   vcs -xprop=tmerge,xprop.cfg -xprop_report=all
+//---------------------------------------------------------------

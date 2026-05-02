@@ -1,0 +1,75 @@
+//===============================================================
+// VCS InitReg Configuration File
+// Usage: vcs -initreg+<config_file> or vcs -initreg+random
+//===============================================================
+
+//---------------------------------------------------------------
+// Global initialization strategy
+// Options: random, 0, 1, x, z
+//---------------------------------------------------------------
++initreg+random
+
+//---------------------------------------------------------------
+// Module/instance level initialization
+// Syntax: +initreg+<value>+module+<module_name>
+//         +initreg+<value>+instance+<hier_path>
+//---------------------------------------------------------------
+// Initialize all regs in a specific module to 0:
+// +initreg+0+module+dut_top
+//
+// Initialize regs in a specific instance to 1:
+// +initreg+1+instance+tb.u_dut.u_core
+//
+// Random init for a specific sub-module:
+// +initreg+random+instance+tb.u_dut.u_mem_ctrl
+
+//---------------------------------------------------------------
+// Signal name pattern matching
+// Syntax: +initreg+<value>+signal+<pattern>
+//---------------------------------------------------------------
+// Initialize all signals matching a pattern:
+// +initreg+0+signal+*rst*
+// +initreg+1+signal+*_en
+// +initreg+random+signal+*cnt*
+
+//---------------------------------------------------------------
+// Memory initialization
+// Syntax: +initreg+<value>+memory+<hier_path>
+//---------------------------------------------------------------
+// Initialize memory array to 0:
+// +initreg+0+memory+tb.u_dut.u_sram.mem
+//
+// Random init for all memories:
+// +initreg+random+memory+*
+
+//---------------------------------------------------------------
+// Exclusion rules
+// Syntax: +noiinitreg+module+<module_name>
+//         +noiinitreg+instance+<hier_path>
+//         +noiinitreg+signal+<pattern>
+//---------------------------------------------------------------
+// Exclude a module from initialization:
+// +noiinitreg+module+clock_gen
+//
+// Exclude specific instance:
+// +noiinitreg+instance+tb.u_dut.u_pll
+//
+// Exclude signals matching pattern:
+// +noiinitreg+signal+*clk*
+
+//---------------------------------------------------------------
+// Width-based initialization
+// Syntax: +initreg+<value>+width+<min>+<max>
+//---------------------------------------------------------------
+// Initialize only 1-bit regs to 0 (flops):
+// +initreg+0+width+1+1
+//
+// Initialize wide regs (32-bit+) to random:
+// +initreg+random+width+32+1024
+
+//---------------------------------------------------------------
+// Two-state / four-state control
+// +initreg+2state   : init to 0/1 only (no x/z)
+// +initreg+4state   : allow x/z init values
+//---------------------------------------------------------------
+// +initreg+2state

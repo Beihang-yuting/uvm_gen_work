@@ -1,0 +1,14 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_SYS_IF__SV
+`define  {{ block_name | upper }}_SYS_IF__SV
+
+
+interface {{ block_name }}_sys_if(input logic clk, input logic rst_n);
+
+{% for agent in agents %}
+    {{ agent.name }}_if  m_{{ agent.name }}_if(.*);
+{% endfor %}
+
+endinterface
+
+`endif

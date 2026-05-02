@@ -9,10 +9,9 @@ from uvm_gen.generators.base import BaseGenerator
 @pytest.fixture
 def project_cfg():
     return ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
         block_name="top",
-        platform_type=PlatformType.SELF_CONTAINED,
+        author="ryan.yu",
+        platform_type=PlatformType.ADVANCE,
         agents=[AgentConfig(name="axi")],
     )
 
@@ -24,7 +23,7 @@ def gen(project_cfg):
 
 def test_base_generator_init(gen):
     assert gen.jinja_env is not None
-    assert gen.cfg.project_name == "bootis"
+    assert gen.cfg.block_name == "top"
 
 
 def test_render_template_string(gen):
@@ -34,7 +33,7 @@ def test_render_template_string(gen):
 
 def test_render_header(gen):
     header = gen.render_header("test_file.sv")
-    assert "bootis" in header
+    assert "top" in header
     assert "ryan.yu" in header
     assert "test_file.sv" in header
 
@@ -55,9 +54,9 @@ def test_write_file_creates_parent_dirs(gen):
         assert os.path.exists(path)
 
 
-def test_get_template_path_self_contained(gen):
+def test_get_template_path_advance(gen):
     path = gen.get_template_path("agent", "agent.sv.j2")
-    assert "self_contained/agent/agent.sv.j2" in path
+    assert "advance/agent/agent.sv.j2" in path
 
 
 def test_get_template_path_common(gen):

@@ -1,0 +1,31 @@
+{{ header(file_name) }}
+`ifndef  {{ name | upper }}_TEST_ENV__SV
+`define  {{ name | upper }}_TEST_ENV__SV
+
+
+class {{ name }}_test_env extends uvm_env;
+    `uvm_component_utils({{ name }}_test_env)
+
+    {{ name }}_test_env_cfg      m_cfg;
+    {{ name }}_agent             m_{{ name }}_agt;
+
+    function new(string name = "{{ name }}_test_env", uvm_component parent = null);
+        super.new(name, parent);
+    endfunction
+
+    function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        if(this.m_cfg == null) begin
+            this.m_cfg = {{ name }}_test_env_cfg::type_id::create("m_cfg", this);
+        end
+        m_{{ name }}_agt = {{ name }}_agent::type_id::create("m_{{ name }}_agt", this);
+        m_{{ name }}_agt.m_cfg = m_cfg.m_{{ name }}_agt_cfg;
+    endfunction
+
+    function void connect_phase(uvm_phase phase);
+        super.connect_phase(phase);
+    endfunction
+
+endclass
+
+`endif

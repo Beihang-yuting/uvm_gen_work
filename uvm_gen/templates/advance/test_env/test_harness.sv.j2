@@ -1,0 +1,43 @@
+{{ header(file_name) }}
+`ifndef  {{ name | upper }}_TEST_HARNESS__SV
+`define  {{ name | upper }}_TEST_HARNESS__SV
+
+
+module {{ name }}_test_harness;
+
+    parameter CLK_PERIOD = 10;
+
+    reg clk;
+    reg rst_n;
+
+    initial begin
+        clk = 0;
+        forever #(CLK_PERIOD/2) clk = ~clk;
+    end
+
+    initial begin
+        rst_n = 0;
+        #(CLK_PERIOD*10);
+        rst_n = 1;
+    end
+
+    {{ name }}_if m_{{ name }}_if(
+        .clk    (clk),
+        .rst_n  (rst_n)
+    );
+
+    // TODO: Instantiate DUT here
+    // {{ name }}_dut u_dut (
+    //     .clk    (clk),
+    //     .rst_n  (rst_n),
+    //     ...
+    // );
+
+    initial begin
+        uvm_config_db#(virtual {{ name }}_if)::set(null, "*", "m_{{ name }}_if", m_{{ name }}_if);
+        run_test();
+    end
+
+endmodule
+
+`endif

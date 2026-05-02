@@ -1,0 +1,168 @@
+#===============================================================
+# Verdi FSDB Wave Dump Script
+# Usage: In testbench or via +fsdb+autoflush in VCS
+#        Or: verdi -ssf wave.fsdb -sswr wave.tcl
+#===============================================================
+
+#---------------------------------------------------------------
+# 1. Basic FSDB Dump
+#---------------------------------------------------------------
+# Open dump file
+fsdbDumpfile "wave.fsdb" -compress
+
+# Dump all signals from top with unlimited depth
+fsdbDumpvars 0 "tb"
+
+#---------------------------------------------------------------
+# 2. Hierarchical Selective Dump
+#---------------------------------------------------------------
+# Dump specific hierarchy with depth control
+# fsdbDumpvars 0 "tb.u_dut"                   ;# full depth
+# fsdbDumpvars 1 "tb.u_dut"                   ;# only top level of u_dut
+# fsdbDumpvars 2 "tb.u_dut.u_core"            ;# 2 levels deep
+
+# Dump multiple specific scopes
+# fsdbDumpvars 0 "tb.u_dut.u_core"
+# fsdbDumpvars 0 "tb.u_dut.u_mem_ctrl"
+# fsdbDumpvars 0 "tb.u_dut.u_bus"
+
+#---------------------------------------------------------------
+# 3. Dump Control (On/Off/Limit)
+#---------------------------------------------------------------
+# Pause dump (reduce file size during uninteresting phases)
+# fsdbDumpoff
+
+# Resume dump
+# fsdbDumpon
+
+# Dump for a limited time window
+# fsdbDumpon
+# run 1000ns
+# fsdbDumpoff
+
+# Limit max dump file size (in MB)
+# fsdbDumpSetMaxFileSize 2048
+
+#---------------------------------------------------------------
+# 4. Signal Filtering (Include/Exclude)
+#---------------------------------------------------------------
+# Dump only signals matching a pattern
+# fsdbDumpvars 0 "tb.u_dut" +mda +all
+# fsdbDumpvarsByFile "signal_list.txt"
+
+# Exclude specific signals (reduce file size)
+# fsdbSuppress "tb.u_dut.u_sram.mem"
+# fsdbSuppress "tb.u_dut.u_rom.data"
+
+# Dump only ports (no internal signals)
+# fsdbDumpvars 0 "tb.u_dut" +IO_Only
+
+# Dump only specific signal types
+# fsdbDumpvars 0 "tb.u_dut" +Reg_Only
+# fsdbDumpvars 0 "tb.u_dut" +Wire_Only
+
+#---------------------------------------------------------------
+# 5. Memory / Array Dump
+#---------------------------------------------------------------
+# Dump memory arrays (can be very large!)
+# fsdbDumpMDA 0 "tb.u_dut.u_sram"             ;# dump all MDAs in scope
+# fsdbDumpvars 0 "tb.u_dut" +mda               ;# dump with MDA enabled
+
+# Dump specific memory range
+# fsdbDumpMDAByRange "tb.u_dut.u_sram.mem" 0 255
+
+#---------------------------------------------------------------
+# 6. SV Interface / Struct Dump
+#---------------------------------------------------------------
+# Dump SystemVerilog interfaces
+# fsdbDumpSVA 0 "tb"                           ;# dump all SVA
+# fsdbDumpvars 0 "tb.u_sys_if" +all            ;# dump interface signals
+
+# Dump packed/unpacked structs
+# fsdbDumpvars 0 "tb.u_dut" +struct
+
+#---------------------------------------------------------------
+# 7. Power Domain Dump
+#---------------------------------------------------------------
+# Dump UPF power information
+# fsdbDumpvars 0 "tb.u_dut" +power
+# fsdbDumpvars 0 "tb.u_dut" +supply
+
+#---------------------------------------------------------------
+# 8. Rewind Dump (Re-dump Previous Time Window)
+#   - Keep last N time units in a circular buffer
+#   - When triggered, flush the buffer to FSDB
+#   - Useful for capturing events before a failure
+#---------------------------------------------------------------
+# Enable rewind buffer (keep last 10us)
+# fsdbDumpRewind 10000 "tb"
+
+# In your testbench, trigger flush on error:
+# Example SV code:
+#   initial begin
+#       @(posedge error_flag);
+#       $fsdbDumpFlush;         // flush rewind buffer to file
+#       $fsdbDumpon;            // continue normal dump after error
+#       #1000ns;
+#       $fsdbDumpoff;
+#   end
+
+# Alternative: trigger from TCL
+# fsdbDumpRewindTrigger          ;# manually trigger buffer flush
+
+#---------------------------------------------------------------
+# 9. Dump Status Query
+#---------------------------------------------------------------
+# Check current dump status
+# fsdbDumpStatus
+
+# Query dump file info
+# fsdbDumpFileInfo "wave.fsdb"
+
+# Check if dump is active
+# fsdbIsDumping
+
+#---------------------------------------------------------------
+# 10. Conditional / Event-Triggered Dump
+#---------------------------------------------------------------
+# Start dump at specific simulation time
+# run 500ns
+# fsdbDumpon
+# fsdbDumpvars 0 "tb.u_dut"
+
+# Dump on specific event (TCL callback approach)
+# proc dump_on_error {} {
+#     fsdbDumpon
+#     fsdbDumpvars 0 "tb.u_dut"
+#     run 2000ns
+#     fsdbDumpoff
+# }
+
+# Conditional dump with UVM severity
+# proc dump_on_uvm_error {severity} {
+#     if {$severity >= 300} {
+#         fsdbDumpRewindTrigger
+#         fsdbDumpon
+#     }
+# }
+
+#---------------------------------------------------------------
+# 11. Auto-flush Configuration
+#---------------------------------------------------------------
+# Flush FSDB periodically (prevent data loss on crash)
+fsdbDumpFlush
+
+# Set auto-flush interval (every 1000 time units)
+# fsdbAutoflushSetInterval 1000
+
+#---------------------------------------------------------------
+# 12. FSDB+ Features (Extended)
+#---------------------------------------------------------------
+# Transaction recording (for UVM sequences)
+# fsdbDumpvars 0 "tb" +transaction
+
+# Force/release recording
+# fsdbDumpvars 0 "tb" +force
+
+# Glitch detection
+# fsdbDumpvars 0 "tb.u_dut" +glitch

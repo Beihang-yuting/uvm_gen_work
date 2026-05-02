@@ -22,3 +22,9 @@ class EnvGenerator(BaseGenerator):
             template_path = self.get_template_path("env", template_name)
             content = self.render_template(template_path, file_name=filename, **ctx)
             self.write_file(os.path.join(output_dir, filename), content)
+
+        # sys_if.sv
+        filename = f"{block}_sys_if.sv"
+        template_path = self.get_template_path("env", "sys_if.sv.j2")
+        content = self.render_template(template_path, file_name=filename, **ctx)
+        self.write_file(os.path.join(output_dir, filename), content)

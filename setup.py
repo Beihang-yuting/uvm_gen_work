@@ -9,7 +9,7 @@ setup(
     install_requires=["Jinja2>=3.1", "PyYAML>=6.0"],
     entry_points={
         "console_scripts": [
-            "uvm_gen=uvm_gen.cli:main",
+            "gen_tb=uvm_gen.cli:main",
         ],
     },
     python_requires=">=3.10",

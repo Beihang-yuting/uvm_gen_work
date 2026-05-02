@@ -9,10 +9,9 @@ from uvm_gen.generators.common import CommonGenerator
 @pytest.fixture
 def project_cfg():
     return ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
         block_name="top",
-        platform_type=PlatformType.SELF_CONTAINED,
+        author="ryan.yu",
+        platform_type=PlatformType.ADVANCE,
         agents=[AgentConfig(name="axi")],
     )
 
@@ -154,5 +153,17 @@ def test_sv_files_have_header(project_cfg):
         for fname in sv_files:
             with open(os.path.join(tmpdir, fname)) as f:
                 content = f.read()
-            assert "bootis" in content, f"{fname} missing project_name in header"
+            assert "top" in content, f"{fname} missing block_name in header"
             assert "ryan.yu" in content, f"{fname} missing author in header"
+
+
+def test_common_uvm_scb_disorder_renamed(project_cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        gen = CommonGenerator(project_cfg)
+        gen.generate(tmpdir)
+        with open(os.path.join(tmpdir, "common_uvm_scb.sv")) as f:
+            content = f.read()
+        assert "DISORDER_CMP" in content
+        assert "DISSORDER_CMP" not in content
+        assert "m_err_print_threshold" in content
+        assert "m_err_print_threadhold" not in content

@@ -5,49 +5,43 @@ from uvm_gen.config import ProjectConfig, PlatformType, AgentConfig
 from uvm_gen.generators.platform import PlatformGenerator
 
 @pytest.fixture
-def sc_cfg():
-    return ProjectConfig(project_name="bootis", author="ryan.yu", block_name="top",
-        platform_type=PlatformType.SELF_CONTAINED,
+def adv_cfg():
+    return ProjectConfig(block_name="top", author="ryan.yu",
+        platform_type=PlatformType.ADVANCE,
         agents=[AgentConfig(name="axi"),
                 AgentConfig(name="apb")])
 
 @pytest.fixture
-def std_cfg():
-    return ProjectConfig(project_name="bootis", author="ryan.yu", block_name="top",
-        platform_type=PlatformType.STANDARD,
+def port_cfg():
+    return ProjectConfig(block_name="top", author="ryan.yu",
+        platform_type=PlatformType.PORT,
         agents=[AgentConfig(name="axi")])
 
-def test_sc_platform_full_structure(sc_cfg):
+def test_adv_platform_full_structure(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        sc_cfg.output_dir = tmpdir
-        gen = PlatformGenerator(sc_cfg)
+        adv_cfg.output_dir = tmpdir
+        gen = PlatformGenerator(adv_cfg)
         gen.generate()
-        project_dir = os.path.join(tmpdir, "bootis_top")
-        for d in ["agents", "env", "common", "harness", "tc", "cfg", "sim", "ral", "doc"]:
+        project_dir = os.path.join(tmpdir, "top")
+        for d in ["env", "env/agents", "env/ral", "common", "th", "tc", "cfg", "doc"]:
             assert os.path.isdir(os.path.join(project_dir, d)), f"Missing dir: {d}"
-        assert os.path.isdir(os.path.join(project_dir, "agents", "axi_agent", "src"))
-        assert os.path.isdir(os.path.join(project_dir, "agents", "apb_agent", "src"))
+        assert os.path.isdir(os.path.join(project_dir, "env", "agents", "axi_agent", "src"))
+        assert os.path.isdir(os.path.join(project_dir, "env", "agents", "apb_agent", "src"))
         assert os.path.exists(os.path.join(project_dir, "env", "top_env.sv"))
+        assert os.path.exists(os.path.join(project_dir, "env", "top_sys_if.sv"))
         assert os.path.exists(os.path.join(project_dir, "common", "common_lib_pkg.sv"))
-        assert os.path.exists(os.path.join(project_dir, "harness", "harness.sv"))
+        assert os.path.exists(os.path.join(project_dir, "th", "harness.sv"))
         assert os.path.exists(os.path.join(project_dir, "tc", "base_test.sv"))
         assert os.path.exists(os.path.join(project_dir, "cfg", "tb.f"))
-        assert os.path.exists(os.path.join(project_dir, "sim", "Makefile"))
+        assert os.path.exists(os.path.join(project_dir, "cfg", "initreg.cfg"))
+        assert os.path.exists(os.path.join(project_dir, "cfg", "xprop.cfg"))
+        assert os.path.exists(os.path.join(project_dir, "cfg", "wave.tcl"))
 
-def test_std_platform_full_structure(std_cfg):
+def test_port_platform_full_structure(port_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        std_cfg.output_dir = tmpdir
-        gen = PlatformGenerator(std_cfg)
+        port_cfg.output_dir = tmpdir
+        gen = PlatformGenerator(port_cfg)
         gen.generate()
-        project_dir = os.path.join(tmpdir, "bootis_top")
+        project_dir = os.path.join(tmpdir, "top")
         with open(os.path.join(project_dir, "env", "top_env.sv")) as f:
             assert "uvm_tlm_analysis_fifo" in f.read()
-
-def test_platform_sim_dirs(sc_cfg):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        sc_cfg.output_dir = tmpdir
-        gen = PlatformGenerator(sc_cfg)
-        gen.generate()
-        project_dir = os.path.join(tmpdir, "bootis_top")
-        assert os.path.isdir(os.path.join(project_dir, "sim", "log"))
-        assert os.path.isdir(os.path.join(project_dir, "sim", "wave"))

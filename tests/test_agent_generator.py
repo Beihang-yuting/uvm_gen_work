@@ -7,31 +7,29 @@ from uvm_gen.generators.agent import AgentGenerator
 
 
 @pytest.fixture
-def sc_cfg():
+def adv_cfg():
     return ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
         block_name="top",
-        platform_type=PlatformType.SELF_CONTAINED,
+        author="ryan.yu",
+        platform_type=PlatformType.ADVANCE,
         agents=[AgentConfig(name="axi")],
     )
 
 
 @pytest.fixture
-def std_cfg():
+def port_cfg():
     return ProjectConfig(
-        project_name="bootis",
-        author="ryan.yu",
         block_name="top",
-        platform_type=PlatformType.STANDARD,
+        author="ryan.yu",
+        platform_type=PlatformType.PORT,
         agents=[AgentConfig(name="axi")],
     )
 
 
-def test_sc_agent_generates_all_files(sc_cfg):
+def test_adv_agent_generates_all_files(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(sc_cfg)
-        gen.generate_agent(sc_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
         agent_dir = os.path.join(tmpdir, "axi_agent")
         expected = [
             "axi_agent.f",
@@ -49,20 +47,20 @@ def test_sc_agent_generates_all_files(sc_cfg):
             assert os.path.exists(os.path.join(agent_dir, f)), f"Missing: {f}"
 
 
-def test_sc_agent_has_internal_fifo(sc_cfg):
+def test_adv_agent_has_internal_fifo(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(sc_cfg)
-        gen.generate_agent(sc_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "src", "axi_agent.sv")) as f:
             content = f.read()
         assert "m_mon_fifo" in content
         assert "m_req_fifo" in content
 
 
-def test_sc_base_seq_has_send_trans(sc_cfg):
+def test_adv_base_seq_has_send_trans(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(sc_cfg)
-        gen.generate_agent(sc_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "src", "axi_base_seq.sv")) as f:
             content = f.read()
         assert "task send_trans" in content
@@ -72,20 +70,20 @@ def test_sc_base_seq_has_send_trans(sc_cfg):
         assert "task send_response" in content
 
 
-def test_sc_drv_has_master_slave_branch(sc_cfg):
+def test_adv_drv_has_master_slave_branch(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(sc_cfg)
-        gen.generate_agent(sc_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "src", "axi_drv.sv")) as f:
             content = f.read()
         assert "master_drive" in content
         assert "slave_drive" in content
 
 
-def test_sc_cfg_has_agent_mode_enum(sc_cfg):
+def test_adv_cfg_has_agent_mode_enum(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(sc_cfg)
-        gen.generate_agent(sc_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "src", "axi_agt_cfg.sv")) as f:
             content = f.read()
         assert "agent_mode_e" in content
@@ -93,30 +91,44 @@ def test_sc_cfg_has_agent_mode_enum(sc_cfg):
         assert "AGENT_ONLY_MONITOR" in content
 
 
-def test_std_agent_no_internal_fifo(std_cfg):
+def test_port_agent_no_internal_fifo(port_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(std_cfg)
-        gen.generate_agent(std_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(port_cfg)
+        gen.generate_agent(port_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "src", "axi_agent.sv")) as f:
             content = f.read()
         assert "m_mon_fifo" not in content
         assert "m_mon_ap" in content
 
 
-def test_std_base_seq_no_task_wrappers(std_cfg):
+def test_port_base_seq_no_task_wrappers(port_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(std_cfg)
-        gen.generate_agent(std_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(port_cfg)
+        gen.generate_agent(port_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "src", "axi_base_seq.sv")) as f:
             content = f.read()
         assert "task send_trans" not in content
 
 
-def test_agent_filelist(sc_cfg):
+def test_agent_filelist(adv_cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
-        gen = AgentGenerator(sc_cfg)
-        gen.generate_agent(sc_cfg.agents[0], tmpdir)
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
         with open(os.path.join(tmpdir, "axi_agent", "axi_agent.f")) as f:
             content = f.read()
         assert "axi_agent_pkg.sv" in content
         assert "+incdir" in content
+
+
+def test_agent_generates_test_env(adv_cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        gen = AgentGenerator(adv_cfg)
+        gen.generate_agent(adv_cfg.agents[0], tmpdir)
+        test_env_dir = os.path.join(tmpdir, "axi_agent", "test_env")
+        assert os.path.isdir(test_env_dir)
+        assert os.path.exists(os.path.join(test_env_dir, "axi_test_env.sv"))
+        assert os.path.exists(os.path.join(test_env_dir, "axi_test_env_cfg.sv"))
+        assert os.path.exists(os.path.join(test_env_dir, "axi_test_harness.sv"))
+        assert os.path.exists(os.path.join(test_env_dir, "axi_base_test.sv"))
+        assert os.path.exists(os.path.join(test_env_dir, "cfg", "tb.f"))
+        assert os.path.exists(os.path.join(test_env_dir, "cfg", "env.f"))
