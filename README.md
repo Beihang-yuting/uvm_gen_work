@@ -4,13 +4,49 @@
 
 ## 安装
 
+### 依赖
+
+- Python 3.8+
+- Jinja2 >= 2.11
+- PyYAML >= 5.0
+
+### 在线安装
+
 ```bash
+# 默认源
 pip install -e .
+
+# 国内源（推荐）
+pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-安装后可直接使用 `gen_tb` 命令。也可以不安装，通过 `python -m uvm_gen.cli` 调用。
+### 离线安装
 
-依赖：Python 3.10+, Jinja2, PyYAML
+如果目标机器无法联网，先在能上网的机器下载依赖包：
+
+```bash
+# 1. 下载依赖到 packages/ 目录
+pip download Jinja2 PyYAML -d ./packages -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 2. 将整个项目（含 packages/）拷贝到目标机器
+
+# 3. 在目标机器上离线安装
+pip install --no-index --find-links=./packages -e .
+```
+
+### 免安装使用
+
+不想安装也可以直接运行（需手动确保 Jinja2 和 PyYAML 已安装）：
+
+```bash
+# 手动安装依赖
+pip install Jinja2 PyYAML
+
+# 直接运行
+python -m uvm_gen.cli -b top -a "axi,apb"
+```
+
+安装后可在任意路径使用 `gen_tb` 命令。
 
 ## 快速开始
 
