@@ -8,7 +8,7 @@
 
 - Python 3.8+
 - Jinja2 >= 2.11
-- PyYAML >= 5.0
+- PyYAML >= 6.0
 
 ### 在线安装
 
