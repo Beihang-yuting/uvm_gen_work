@@ -6,7 +6,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     package_data={"uvm_gen": ["templates/**/*.j2"]},
-    install_requires=["Jinja2>=2.11", "PyYAML>=6.0"],
+    install_requires=["Jinja2>=2.11", "PyYAML>=6.0", "MarkupSafe>=1.1,<2.2"],
     entry_points={
         "console_scripts": [
             "gen_tb=uvm_gen.cli:main",
