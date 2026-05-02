@@ -88,7 +88,7 @@ function void {{ name }}_agent::connect_phase(uvm_phase phase);
 
     // Monitor -> FIFO + Analysis Port
     m_mon.m_ap.connect(m_mon_fifo.analysis_export);
-    m_mon.m_ap.connect(m_mon_ap.analysis_export);
+    m_mon.m_ap.connect(m_mon_ap);
 
     // Pass FIFO references to sequencer for self-contained mode
     if(m_sqr != null) begin

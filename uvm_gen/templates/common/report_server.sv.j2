@@ -3,13 +3,15 @@
 `define  COMMON_REPORT_SERVER__SV
 
 
-class common_report_server extends uvm_report_server;
-    virtual function string compose_message(uvm_severity severity,
-                                            string   name,
-                                            string   id,
-                                            string   message,
-                                            string   filename,
-                                            int      line);
+class common_report_server extends uvm_default_report_server;
+    virtual function string compose_report_message(uvm_report_message report_message,
+                                                   string report_object_name = "");
+        uvm_severity    severity = report_message.get_severity();
+        string          name     = report_message.get_report_object().get_full_name();
+        string          id       = report_message.get_id();
+        string          message  = report_message.get_message();
+        string          filename = report_message.get_filename();
+        int             line     = report_message.get_line();
         uvm_severity_type severity_type = uvm_severity_type'(severity);
         if(severity_type == UVM_INFO) begin
             if(name == id) begin

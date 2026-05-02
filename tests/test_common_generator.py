@@ -66,8 +66,8 @@ def test_common_report_server_class(project_cfg):
 
         with open(os.path.join(tmpdir, "common_report_server.sv")) as f:
             content = f.read()
-        assert "common_report_server extends uvm_report_server" in content
-        assert "compose_message" in content
+        assert "common_report_server extends uvm_default_report_server" in content
+        assert "compose_report_message" in content
 
 
 def test_common_filelist_content(project_cfg):

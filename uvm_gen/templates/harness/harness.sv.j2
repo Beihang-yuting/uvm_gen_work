@@ -29,6 +29,7 @@ initial begin
     run_test();
 end
 
+`ifdef FSDB
 initial begin
     bit wave_enable;
     string tc_name;
@@ -41,6 +42,7 @@ initial begin
         end
     end
 end
+`endif
 
 endmodule
 `endif
