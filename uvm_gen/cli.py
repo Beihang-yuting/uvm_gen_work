@@ -38,9 +38,25 @@ Examples:
 
 AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
+# --- ANSI colors ---
+_use_color = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+def _c(code, text):
+    if _use_color:
+        return "\033[%sm%s\033[0m" % (code, text)
+    return text
+
+def _bold(text):     return _c("1", text)
+def _green(text):    return _c("32", text)
+def _cyan(text):     return _c("36", text)
+def _yellow(text):   return _c("33", text)
+def _red(text):      return _c("31", text)
+def _dim(text):      return _c("2", text)
+def _magenta(text):  return _c("35", text)
+
 
 def error_exit(msg):
-    print("Error: %s" % msg, file=sys.stderr)
+    print("%s %s" % (_red("Error:"), msg), file=sys.stderr)
     sys.exit(1)
 
 
@@ -94,7 +110,7 @@ def run_from_yaml(yaml_path):
         project_dir = gen.generate()
     except FileExistsError as e:
         error_exit(str(e))
-    print("Platform generated: %s" % project_dir)
+    print("\n  %s %s\n" % (_green("Platform generated:"), _bold(project_dir)))
 
 
 def run_from_args(args):
@@ -126,7 +142,7 @@ def run_from_args(args):
             project_dir = gen.generate()
         except FileExistsError as e:
             error_exit(str(e))
-        print("Platform generated: %s" % project_dir)
+        print("\n  %s %s\n" % (_green("Platform generated:"), _bold(project_dir)))
     else:
         # Standalone agent mode (requires -a)
         if not agents:
@@ -141,28 +157,78 @@ def run_from_args(args):
         )
         gen = AgentGenerator(cfg)
         gen.generate_agent(agent_cfg, args.output)
-        print("Agent generated: %s/%s_agent/" % (args.output, agent_cfg.name))
+        print("\n  %s %s/%s_agent/\n" % (_green("Agent generated:"), args.output, agent_cfg.name))
+
+
+def _prompt(label, hint=""):
+    if hint:
+        return input("  %s %s " % (_cyan(label), _dim(hint))).strip()
+    return input("  %s " % _cyan(label)).strip()
+
+
+def _print_banner():
+    banner = r"""
+  %s
+  %s
+
+  %s  Generate UVM testbench platforms and agents
+  %s  Type: advance (self-contained) | port (standard UVM)
+""" % (
+        _bold(_cyan("  UVM Testbench Generator")),
+        _dim("  " + "=" * 36),
+        _dim("  "),
+        _dim("  "),
+    )
+    print(banner)
+
+
+def _print_summary(cfg, agents):
+    print("")
+    print("  %s" % _bold("Configuration Summary"))
+    print("  %s" % ("-" * 30))
+    print("  %-16s %s" % (_dim("Block:"), _bold(cfg.block_name)))
+    print("  %-16s %s" % (_dim("Type:"), _magenta(cfg.platform_type.value)))
+    if agents:
+        agent_names = ", ".join(a.name for a in agents)
+        print("  %-16s %s" % (_dim("Agents:"), _yellow(agent_names)))
+    else:
+        print("  %-16s %s" % (_dim("Agents:"), _dim("(none)")))
+    print("  %-16s %s" % (_dim("Output:"), cfg.output_dir or "."))
+    print("")
 
 
 def interactive_mode():
-    print("=== UVM Testbench Generator - Interactive Mode ===")
-    print("Choose generation type:")
-    print("  1) Full platform")
-    print("  2) Standalone agent")
-    choice = input("Enter choice [1/2]: ").strip()
+    _print_banner()
 
-    print("\nPlatform type:")
-    print("  1) advance")
-    print("  2) port")
-    ptype_choice = input("Enter choice [1/2]: ").strip()
-    platform_type = PlatformType.ADVANCE if ptype_choice == "1" else PlatformType.PORT
+    # Step 1: Generation type
+    print("  %s" % _bold("Step 1: Generation Type"))
+    print("    %s  Full platform" % _green("1)"))
+    print("    %s  Standalone agent" % _green("2)"))
+    print("")
+    choice = _prompt("Select [1/2]:")
+
+    # Step 2: Platform type
+    print("")
+    print("  %s" % _bold("Step 2: Platform Type"))
+    print("    %s  advance %s" % (_green("1)"), _dim("(self-contained, FIFO in agent)")))
+    print("    %s  port    %s" % (_green("2)"), _dim("(standard UVM, FIFO in env)")))
+    print("")
+    ptype_choice = _prompt("Select [1/2]:", "(default: 1)")
+    if not ptype_choice or ptype_choice == "1":
+        platform_type = PlatformType.ADVANCE
+    else:
+        platform_type = PlatformType.PORT
 
     if choice == "1":
-        block = input("Block name: ").strip()
+        # Step 3: Platform details
+        print("")
+        print("  %s" % _bold("Step 3: Platform Details"))
+        print("")
+        block = _prompt("Block name:")
         if not block:
             error_exit("block name is required.")
-        agents_str = input('Agents (comma-separated, press Enter to skip): ').strip()
-        output = input("Output directory [.]: ").strip() or "."
+        agents_str = _prompt("Agents:", "(comma-separated, Enter to skip)")
+        output = _prompt("Output directory:", "(default: .)") or "."
         agents = parse_agents_string(agents_str) if agents_str else []
         cfg = ProjectConfig(
             block_name=block,
@@ -170,23 +236,53 @@ def interactive_mode():
             agents=agents,
             output_dir=output,
         )
+
+        _print_summary(cfg, agents)
+
+        confirm = _prompt("Confirm? [Y/n]:")
+        if confirm.lower() in ("n", "no"):
+            print("\n  %s\n" % _yellow("Cancelled."))
+            return
+
         gen = PlatformGenerator(cfg)
         try:
-            print("\nPlatform generated: %s" % gen.generate())
+            project_dir = gen.generate()
         except FileExistsError as e:
             error_exit(str(e))
+        print("\n  %s %s\n" % (_green("Platform generated:"), _bold(project_dir)))
+
     elif choice == "2":
-        name = input("Agent name: ").strip()
+        # Step 3: Agent details
+        print("")
+        print("  %s" % _bold("Step 3: Agent Details"))
+        print("")
+        name = _prompt("Agent name:")
+        if not name:
+            error_exit("agent name is required.")
         validate_agent_name(name)
-        output = input("Output directory [.]: ").strip() or "."
+        output = _prompt("Output directory:", "(default: .)") or "."
         agent_cfg = AgentConfig(name=name)
         cfg = ProjectConfig(
             block_name=name,
             platform_type=platform_type,
             agents=[agent_cfg],
         )
+
+        print("")
+        print("  %s" % _bold("Configuration Summary"))
+        print("  %s" % ("-" * 30))
+        print("  %-16s %s" % (_dim("Agent:"), _bold(name)))
+        print("  %-16s %s" % (_dim("Type:"), _magenta(platform_type.value)))
+        print("  %-16s %s" % (_dim("Output:"), output))
+        print("")
+
+        confirm = _prompt("Confirm? [Y/n]:")
+        if confirm.lower() in ("n", "no"):
+            print("\n  %s\n" % _yellow("Cancelled."))
+            return
+
         AgentGenerator(cfg).generate_agent(agent_cfg, output)
-        print("\nAgent generated: %s/%s_agent/" % (output, name))
+        print("\n  %s %s/%s_agent/\n" % (_green("Agent generated:"), output, name))
     else:
         error_exit("invalid choice '%s'. Enter 1 or 2." % choice)
 
