@@ -9,7 +9,7 @@
 - Python 3.8+
 - Jinja2 >= 2.11
 - PyYAML >= 5.0
-- MarkupSafe >= 1.1, < 2.2（Jinja2 依赖，Python 3.8 需限制版本）
+- MarkupSafe >= 2.0（Jinja2 依赖）
 
 ### 在线安装
 
