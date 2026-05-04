@@ -80,6 +80,15 @@ def test_run_yaml_from_args():
         assert os.path.isdir(os.path.join(tmpdir, "sub"))
 
 
+def test_run_platform_no_agents():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        parser = build_parser()
+        args = parser.parse_args(["-b", "top", "-o", tmpdir])
+        run_from_args(args)
+        assert os.path.isdir(os.path.join(tmpdir, "top"))
+        assert os.path.exists(os.path.join(tmpdir, "top", "env", "top_env.sv"))
+
+
 def test_run_yaml_missing_file():
     parser = build_parser()
     args = parser.parse_args(["-f", "/nonexistent.yaml"])

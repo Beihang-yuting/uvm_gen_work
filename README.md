@@ -47,7 +47,32 @@ pip install Jinja2 PyYAML
 python -m uvm_gen.cli -b top -a "axi,apb"
 ```
 
-安装后可在任意路径使用 `gen_tb` 命令。
+### 全局命令配置
+
+`pip install` 后如果 `gen_tb` 命令找不到，有以下方案：
+
+**方案 1：添加 pip scripts 目录到 PATH**
+```bash
+# 查看 pip 安装脚本的位置
+pip show -f uvm_gen | grep gen_tb
+
+# 通常在 ~/.local/bin，加到 PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**方案 2：使用项目自带的 bin/gen_tb 脚本**
+```bash
+# 将项目 bin 目录加到 PATH
+echo 'export PATH="/path/to/uvm_gen/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**方案 3：创建别名**
+```bash
+echo 'alias gen_tb="python3 -m uvm_gen.cli"' >> ~/.bashrc
+source ~/.bashrc
+```
 
 ## 快速开始
 
@@ -62,10 +87,10 @@ gen_tb -a axi
 ## CLI 用法
 
 ```
-gen_tb -b <block> -a <agents> [-t advance|port] [-o <dir>]   生成完整平台
-gen_tb -a <agent_name> [-t advance|port] [-o <dir>]          生成单独 agent
-gen_tb -f <config.yaml>                                       从 YAML 配置生成
-gen_tb                                                        交互模式
+gen_tb -b <block> [-a <agents>] [-t advance|port] [-o <dir>]  生成完整平台
+gen_tb -a <agent_name> [-t advance|port] [-o <dir>]           生成单独 agent
+gen_tb -f <config.yaml>                                        从 YAML 配置生成
+gen_tb                                                         交互模式
 ```
 
 ### 参数说明
@@ -73,7 +98,7 @@ gen_tb                                                        交互模式
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `-b, --block` | Block 名称（省略则为单独 agent 模式） | 无 |
-| `-a, --agent` | Agent 名称列表，逗号分隔 | 必填 |
+| `-a, --agent` | Agent 名称列表，逗号分隔（平台模式可省略） | 无 |
 | `-t, --type` | 平台类型：`advance` 或 `port` | `advance` |
 | `-f, --config` | YAML 配置文件路径 | 无 |
 | `-o, --output` | 输出目录 | `.`（当前目录） |

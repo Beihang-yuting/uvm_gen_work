@@ -15,10 +15,10 @@ USAGE = """\
 UVM Testbench Generator
 
 Usage:
-  gen_tb -b <block> -a <agents> [-t advance|port] [-o <dir>]   Generate full platform
-  gen_tb -a <agent_name> [-t advance|port] [-o <dir>]          Generate standalone agent
-  gen_tb -f <config.yaml>                                       Generate from YAML config
-  gen_tb                                                        Interactive mode
+  gen_tb -b <block> [-a <agents>] [-t advance|port] [-o <dir>]  Generate full platform
+  gen_tb -a <agent_name> [-t advance|port] [-o <dir>]           Generate standalone agent
+  gen_tb -f <config.yaml>                                        Generate from YAML config
+  gen_tb                                                         Interactive mode
 
 Options:
   -b, --block   Block name (omit for standalone agent mode)
@@ -29,7 +29,8 @@ Options:
   -h, --help    Show this help message
 
 Examples:
-  gen_tb -b top -a "axi,apb"              # Full platform, advance mode
+  gen_tb -b top -a "axi,apb"              # Full platform with agents
+  gen_tb -b top                            # Full platform without agents
   gen_tb -b top -a "axi,apb" -t port      # Full platform, port mode
   gen_tb -a axi                            # Standalone agent with test env
   gen_tb -f my_project.yaml                # From YAML config
@@ -38,31 +39,29 @@ Examples:
 AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def error_exit(msg: str) -> None:
-    print(f"Error: {msg}", file=sys.stderr)
+def error_exit(msg):
+    print("Error: %s" % msg, file=sys.stderr)
     sys.exit(1)
 
 
-def validate_agent_name(name: str) -> None:
+def validate_agent_name(name):
     if not AGENT_NAME_RE.match(name):
         error_exit(
-            f"agent name '{name}' is invalid. Use only [a-z0-9_], must start with a letter."
+            "agent name '%s' is invalid. Use only [a-z0-9_], must start with a letter." % name
         )
 
 
-def parse_agents_string(agents_str: str) -> list[AgentConfig]:
+def parse_agents_string(agents_str):
     agents = []
     for name in agents_str.split(","):
         name = name.strip()
         if name:
             validate_agent_name(name)
             agents.append(AgentConfig(name=name))
-    if not agents:
-        error_exit("no valid agent names provided.")
     return agents
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser():
     parser = argparse.ArgumentParser(
         prog="gen_tb",
         description="UVM Testbench Generator",
@@ -80,14 +79,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_from_yaml(yaml_path: str) -> None:
+def run_from_yaml(yaml_path):
     if not os.path.exists(yaml_path):
-        error_exit(f"config file '{yaml_path}' not found.")
+        error_exit("config file '%s' not found." % yaml_path)
     try:
         with open(yaml_path) as f:
             cfg = ProjectConfig.from_yaml(f.read())
     except yaml.YAMLError as e:
-        error_exit(f"failed to parse '{yaml_path}': {e}")
+        error_exit("failed to parse '%s': %s" % (yaml_path, e))
     except ValueError as e:
         error_exit(str(e))
     gen = PlatformGenerator(cfg)
@@ -95,10 +94,10 @@ def run_from_yaml(yaml_path: str) -> None:
         project_dir = gen.generate()
     except FileExistsError as e:
         error_exit(str(e))
-    print(f"Platform generated: {project_dir}")
+    print("Platform generated: %s" % project_dir)
 
 
-def run_from_args(args: argparse.Namespace) -> None:
+def run_from_args(args):
     if args.config_file:
         run_from_yaml(args.config_file)
         return
@@ -107,13 +106,15 @@ def run_from_args(args: argparse.Namespace) -> None:
         interactive_mode()
         return
 
-    if args.agent is None:
-        error_exit("-a/--agent is required. Use -h for help.")
-
-    agents = parse_agents_string(args.agent)
     platform_type = PlatformType(args.type)
 
+    if args.agent is not None:
+        agents = parse_agents_string(args.agent)
+    else:
+        agents = []
+
     if args.block:
+        # Full platform mode (-a is optional)
         cfg = ProjectConfig(
             block_name=args.block,
             platform_type=platform_type,
@@ -125,8 +126,11 @@ def run_from_args(args: argparse.Namespace) -> None:
             project_dir = gen.generate()
         except FileExistsError as e:
             error_exit(str(e))
-        print(f"Platform generated: {project_dir}")
+        print("Platform generated: %s" % project_dir)
     else:
+        # Standalone agent mode (requires -a)
+        if not agents:
+            error_exit("-a/--agent is required for standalone agent mode. Use -b for platform mode, or -h for help.")
         if len(agents) > 1:
             error_exit("standalone agent mode supports only one agent. Use -b for platform mode.")
         agent_cfg = agents[0]
@@ -137,10 +141,10 @@ def run_from_args(args: argparse.Namespace) -> None:
         )
         gen = AgentGenerator(cfg)
         gen.generate_agent(agent_cfg, args.output)
-        print(f"Agent generated: {args.output}/{agent_cfg.name}_agent/")
+        print("Agent generated: %s/%s_agent/" % (args.output, agent_cfg.name))
 
 
-def interactive_mode() -> None:
+def interactive_mode():
     print("=== UVM Testbench Generator - Interactive Mode ===")
     print("Choose generation type:")
     print("  1) Full platform")
@@ -157,9 +161,9 @@ def interactive_mode() -> None:
         block = input("Block name: ").strip()
         if not block:
             error_exit("block name is required.")
-        agents_str = input('Agents (e.g. "axi,apb,pcie"): ').strip()
+        agents_str = input('Agents (comma-separated, press Enter to skip): ').strip()
         output = input("Output directory [.]: ").strip() or "."
-        agents = parse_agents_string(agents_str)
+        agents = parse_agents_string(agents_str) if agents_str else []
         cfg = ProjectConfig(
             block_name=block,
             platform_type=platform_type,
@@ -168,7 +172,7 @@ def interactive_mode() -> None:
         )
         gen = PlatformGenerator(cfg)
         try:
-            print(f"\nPlatform generated: {gen.generate()}")
+            print("\nPlatform generated: %s" % gen.generate())
         except FileExistsError as e:
             error_exit(str(e))
     elif choice == "2":
@@ -182,9 +186,9 @@ def interactive_mode() -> None:
             agents=[agent_cfg],
         )
         AgentGenerator(cfg).generate_agent(agent_cfg, output)
-        print(f"\nAgent generated: {output}/{name}_agent/")
+        print("\nAgent generated: %s/%s_agent/" % (output, name))
     else:
-        error_exit(f"invalid choice '{choice}'. Enter 1 or 2.")
+        error_exit("invalid choice '%s'. Enter 1 or 2." % choice)
 
 
 def main():
