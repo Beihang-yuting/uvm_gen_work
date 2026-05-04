@@ -28,3 +28,9 @@ class EnvGenerator(BaseGenerator):
         template_path = self.get_template_path("env", "sys_if.sv.j2")
         content = self.render_template(template_path, file_name=filename, **ctx)
         self.write_file(os.path.join(output_dir, filename), content)
+
+        # assert.sv and cov.sv (reference templates, not in filelist)
+        for tpl, suffix in [("common/assert.sv.j2", "_assert.sv"), ("common/cov.sv.j2", "_cov.sv")]:
+            filename = "%s%s" % (block, suffix)
+            content = self.render_template(tpl, file_name=filename, **ctx)
+            self.write_file(os.path.join(output_dir, filename), content)

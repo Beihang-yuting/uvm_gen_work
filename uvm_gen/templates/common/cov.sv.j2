@@ -1,0 +1,361 @@
+{{ header(file_name) }}
+`ifndef  {{ block_name | upper }}_COV__SV
+`define  {{ block_name | upper }}_COV__SV
+
+//===============================================================
+// 功能覆盖率（Functional Coverage）参考模板
+//
+// *** 本文件为参考模板，未加入 filelist，用户按需引入 ***
+//
+// 功能：提供 covergroup / coverpoint / cross 等完整语法示例
+// 使用：将需要的覆盖率定义复制到你的 env 或 subscriber 中
+// 加载：若需使用，在 env.f 中添加  ../env/{{ block_name }}_cov.sv
+//===============================================================
+
+
+//===============================================================
+// 一、基本 Covergroup
+//---------------------------------------------------------------
+// covergroup 是覆盖率收集的基本单元
+// 通过 sample() 方法触发采样
+//===============================================================
+
+// class {{ block_name }}_basic_cov extends uvm_component;
+//     `uvm_component_utils({{ block_name }}_basic_cov)
+//
+//     // 要采样的变量
+//     logic [7:0]  cmd;
+//     logic [31:0] addr;
+//     logic [31:0] data;
+//     bit          wr_rd;       // 1=写, 0=读
+//
+//     // 定义 covergroup（自动采样模式，每个时钟沿触发）
+//     covergroup cg_basic @(posedge clk);
+//     endgroup
+//
+//     // 手动采样模式（推荐，配合 UVM subscriber 使用）
+//     covergroup cg_manual;
+//     endgroup
+//
+//     function new(string name, uvm_component parent);
+//         super.new(name, parent);
+//         cg_manual = new();     // 创建 covergroup 实例
+//     endfunction
+//
+//     // 在 write 方法中采样（subscriber 模式）
+//     function void write(my_trans tr);
+//         this.cmd  = tr.cmd;
+//         this.addr = tr.addr;
+//         this.data = tr.data;
+//         cg_manual.sample();    // 手动触发采样
+//     endfunction
+// endclass
+
+
+//===============================================================
+// 二、Coverpoint（覆盖点）
+//---------------------------------------------------------------
+// 定义要覆盖的变量和 bin 划分方式
+//===============================================================
+
+// covergroup cg_coverpoint;
+//
+//     // ----- 2.1 自动 bin（默认 64 个 bin）-----
+//     // 自动将值域均匀划分
+//     cp_auto: coverpoint addr;
+//
+//     // 限制自动 bin 数量
+//     cp_auto_16: coverpoint addr {
+//         option.auto_bin_max = 16;
+//     }
+//
+//     // ----- 2.2 显式 bin -----
+//     cp_cmd: coverpoint cmd {
+//         bins read_cmd  = {8'h01};              // 单个值
+//         bins write_cmd = {8'h02};
+//         bins cfg_cmd   = {8'h10, 8'h11, 8'h12}; // 多个值归为一个 bin
+//         bins burst_cmd = {[8'h20:8'h2F]};      // 值范围
+//         bins others    = default;               // 其余所有值
+//     }
+//
+//     // ----- 2.3 枚举类型覆盖 -----
+//     // typedef enum {IDLE, READ, WRITE, BURST} state_e;
+//     cp_state: coverpoint state {
+//         bins idle  = {IDLE};
+//         bins read  = {READ};
+//         bins write = {WRITE};
+//         bins burst = {BURST};
+//     }
+//
+//     // ----- 2.4 数组 bin（每个值一个 bin）-----
+//     cp_id: coverpoint trans_id {
+//         bins id[] = {[0:15]};     // 生成 16 个独立的 bin: id[0], id[1], ...
+//     }
+//
+//     // ----- 2.5 非法值 bin -----
+//     // illegal_bins 匹配时报错，用于检查不应出现的值
+//     cp_size: coverpoint burst_size {
+//         bins valid_sizes[] = {1, 2, 4, 8, 16};
+//         illegal_bins bad_size = {0};            // size=0 是非法的
+//         illegal_bins too_large = {[32:$]};      // 超过 16 也是非法的
+//     }
+//
+//     // ----- 2.6 忽略值 bin -----
+//     // ignore_bins 不计入覆盖率统计
+//     cp_addr: coverpoint addr[15:0] {
+//         bins low_range  = {[16'h0000:16'h0FFF]};
+//         bins mid_range  = {[16'h1000:16'h7FFF]};
+//         bins high_range = {[16'h8000:16'hFFFF]};
+//         ignore_bins reserved = {[16'hFF00:16'hFFFF]}; // 保留地址不统计
+//     }
+//
+// endgroup
+
+
+//===============================================================
+// 三、Transition Coverage（转换覆盖率）
+//---------------------------------------------------------------
+// 覆盖信号值的变化序列（状态跳转）
+//===============================================================
+
+// covergroup cg_transition;
+//
+//     // ----- 3.1 两值转换 -----
+//     // 场景：覆盖状态机的所有合法跳转
+//     cp_state_trans: coverpoint state {
+//         bins idle_to_read  = (IDLE  => READ);
+//         bins idle_to_write = (IDLE  => WRITE);
+//         bins read_to_idle  = (READ  => IDLE);
+//         bins write_to_idle = (WRITE => IDLE);
+//         bins read_to_write = (READ  => WRITE);  // 是否支持直接跳转?
+//     }
+//
+//     // ----- 3.2 多值转换序列 -----
+//     // 场景：覆盖连续三拍的状态变化
+//     cp_state_seq: coverpoint state {
+//         bins full_read  = (IDLE => READ  => IDLE);
+//         bins full_write = (IDLE => WRITE => IDLE);
+//         bins back2back  = (READ => IDLE  => READ);
+//     }
+//
+//     // ----- 3.3 重复转换 -----
+//     cp_repeat: coverpoint cmd {
+//         bins consecutive_reads  = (READ  [*3]);  // 连续 3 次读
+//         bins consecutive_writes = (WRITE [*3]);  // 连续 3 次写
+//         bins rw_alternate = (READ => WRITE [*2:4]); // 读后连续写 2~4 次
+//     }
+//
+// endgroup
+
+
+//===============================================================
+// 四、Cross Coverage（交叉覆盖率）
+//---------------------------------------------------------------
+// 覆盖多个 coverpoint 的笛卡尔积组合
+//===============================================================
+
+// covergroup cg_cross;
+//
+//     cp_cmd: coverpoint cmd {
+//         bins read  = {CMD_READ};
+//         bins write = {CMD_WRITE};
+//     }
+//
+//     cp_size: coverpoint burst_size {
+//         bins single = {1};
+//         bins burst4 = {4};
+//         bins burst8 = {8};
+//     }
+//
+//     cp_addr_region: coverpoint addr[31:28] {
+//         bins region_0 = {4'h0};
+//         bins region_1 = {4'h1};
+//         bins region_F = {4'hF};
+//     }
+//
+//     // ----- 4.1 基本交叉 -----
+//     // 覆盖 cmd x size 的所有组合（2 x 3 = 6 个 bin）
+//     cx_cmd_size: cross cp_cmd, cp_size;
+//
+//     // ----- 4.2 带过滤的交叉 -----
+//     // 只覆盖感兴趣的组合，忽略不需要的
+//     cx_cmd_addr: cross cp_cmd, cp_addr_region {
+//         // 忽略 region_F 的写操作（该区域只读）
+//         ignore_bins no_write_regionF = binsof(cp_cmd.write) && binsof(cp_addr_region.region_F);
+//     }
+//
+//     // ----- 4.3 三路交叉 -----
+//     cx_all: cross cp_cmd, cp_size, cp_addr_region {
+//         // 限制总 bin 数，只关注特定组合
+//         bins read_burst8_region0 = binsof(cp_cmd.read) && binsof(cp_size.burst8) && binsof(cp_addr_region.region_0);
+//     }
+//
+// endgroup
+
+
+//===============================================================
+// 五、Covergroup 配置选项
+//===============================================================
+
+// covergroup cg_options;
+//
+//     // ----- 5.1 实例级选项 -----
+//     option.per_instance = 1;       // 每个实例独立统计（默认合并）
+//     option.name = "my_cov";        // 覆盖率报告中的名称
+//     option.comment = "AXI 总线覆盖率";
+//     option.goal = 95;              // 目标覆盖率（百分比）
+//     option.at_least = 5;           // 每个 bin 至少命中 5 次才算覆盖
+//     option.auto_bin_max = 32;      // 自动 bin 的最大数量
+//
+//     // ----- 5.2 权重控制 -----
+//     // 某些 coverpoint 权重更高
+//     cp_critical: coverpoint critical_signal {
+//         option.weight = 10;        // 权重 10（默认 1）
+//     }
+//     cp_minor: coverpoint minor_signal {
+//         option.weight = 1;
+//     }
+//
+//     // ----- 5.3 类型级选项（影响所有实例）-----
+//     type_option.merge_instances = 1;  // 合并所有实例的覆盖率
+//
+// endgroup
+
+
+//===============================================================
+// 六、UVM 覆盖率 Subscriber 模式（推荐写法）
+//---------------------------------------------------------------
+// 通过 analysis port 接收 transaction 并自动采样
+//===============================================================
+
+// class {{ block_name }}_coverage extends uvm_subscriber #({{ block_name }}_trans);
+//     `uvm_component_utils({{ block_name }}_coverage)
+//
+//     {{ block_name }}_trans  m_tr;
+//
+//     covergroup cg_{{ block_name }};
+//         cp_cmd: coverpoint m_tr.cmd {
+//             bins read  = {CMD_READ};
+//             bins write = {CMD_WRITE};
+//         }
+//         cp_addr: coverpoint m_tr.addr {
+//             bins low  = {[32'h0000_0000:32'h0000_FFFF]};
+//             bins mid  = {[32'h0001_0000:32'h7FFF_FFFF]};
+//             bins high = {[32'h8000_0000:32'hFFFF_FFFF]};
+//         }
+//         cp_size: coverpoint m_tr.size {
+//             bins byte_access = {1};
+//             bins half_word   = {2};
+//             bins word_access = {4};
+//         }
+//         cx_cmd_addr: cross cp_cmd, cp_addr;
+//         cx_cmd_size: cross cp_cmd, cp_size;
+//     endgroup
+//
+//     function new(string name, uvm_component parent);
+//         super.new(name, parent);
+//         cg_{{ block_name }} = new();
+//     endfunction
+//
+//     // analysis port 回调，每收到一个 transaction 自动调用
+//     function void write({{ block_name }}_trans t);
+//         m_tr = t;
+//         cg_{{ block_name }}.sample();
+//     endfunction
+//
+//     function void report_phase(uvm_phase phase);
+//         super.report_phase(phase);
+//         `uvm_info(get_full_name(),
+//             $sformatf("覆盖率 = %.2f%%", cg_{{ block_name }}.get_coverage()),
+//             UVM_NONE)
+//     endfunction
+// endclass
+
+
+//===============================================================
+// 七、条件采样（iff）
+//---------------------------------------------------------------
+// 只在特定条件下采样，避免无效数据污染覆盖率
+//===============================================================
+
+// covergroup cg_conditional;
+//
+//     // 只在 valid 有效时采样 cmd
+//     cp_cmd: coverpoint cmd iff (valid) {
+//         bins read  = {CMD_READ};
+//         bins write = {CMD_WRITE};
+//     }
+//
+//     // 只在非复位状态下采样
+//     cp_state: coverpoint state iff (rst_n) {
+//         bins all_states[] = {[0:3]};
+//     }
+//
+//     // 只在 burst 模式下采样 size
+//     cp_burst_size: coverpoint size iff (burst_en) {
+//         bins sizes[] = {4, 8, 16};
+//     }
+//
+// endgroup
+
+
+//===============================================================
+// 八、覆盖率控制（运行时开关）
+//---------------------------------------------------------------
+// 通过 plusarg 或代码控制覆盖率收集的开关
+//===============================================================
+
+// class {{ block_name }}_cov_ctrl extends uvm_component;
+//     `uvm_component_utils({{ block_name }}_cov_ctrl)
+//
+//     bit cov_enable = 1;
+//     {{ block_name }}_coverage m_cov;
+//
+//     function void build_phase(uvm_phase phase);
+//         super.build_phase(phase);
+//         // 通过 plusarg 控制：+cov_en=0 关闭覆盖率
+//         void'($value$plusargs("cov_en=%0d", cov_enable));
+//         if (cov_enable) begin
+//             m_cov = {{ block_name }}_coverage::type_id::create("m_cov", this);
+//             `uvm_info(get_full_name(), "覆盖率收集已启用", UVM_NONE)
+//         end else begin
+//             `uvm_info(get_full_name(), "覆盖率收集已关闭", UVM_NONE)
+//         end
+//     endfunction
+// endclass
+
+// 运行时控制：
+//   ./simv +UVM_TESTNAME=xxx +cov_en=1    启用覆盖率
+//   ./simv +UVM_TESTNAME=xxx +cov_en=0    关闭覆盖率
+
+
+//===============================================================
+// 九、VCS 覆盖率收集命令
+//---------------------------------------------------------------
+// *** 使用阶段：编译阶段 + 运行阶段 ***
+//===============================================================
+
+// 编译阶段（启用覆盖率收集）：
+//   vcs ... -cm line+cond+fsm+tgl+branch+assert   启用各类覆盖率
+//
+// 各类覆盖率说明：
+//   line   : 行覆盖率（代码是否被执行）
+//   cond   : 条件覆盖率（if/case 的各分支）
+//   fsm    : 状态机覆盖率（状态跳转）
+//   tgl    : 翻转覆盖率（信号 0->1, 1->0）
+//   branch : 分支覆盖率
+//   assert : 断言覆盖率
+//
+// 运行阶段：
+//   ./simv -cm line+cond+fsm+tgl+branch+assert     收集覆盖率
+//   ./simv -cm line+cond+fsm+tgl+branch+assert -cm_name test1  指定数据库名
+//   ./simv -cm_dir ./coverage                       指定输出目录
+//
+// 合并多个 test 的覆盖率：
+//   urg -dir ./coverage/*.vdb -report ./cov_report
+//
+// 查看覆盖率报告：
+//   urg -dir ./coverage/*.vdb -report ./cov_report -format both
+//   firefox ./cov_report/dashboard.html
+
+`endif
