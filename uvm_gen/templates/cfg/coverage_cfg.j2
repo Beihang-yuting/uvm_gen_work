@@ -92,10 +92,23 @@
 //
 // 需求：只收集 top 层和所有一级子模块的翻转覆盖率
 //       不递归收集二级及更深层次
+//
+// 重要说明：
+//   本配置文件（-cm_hier）只控制收集的 **层次范围**（哪些模块）
+//   覆盖率 **类型** 由编译命令的 -cm 参数决定
+//
+//   如果只要翻转覆盖率，编译时只写 -cm tgl：
+//     vcs ... -cm tgl -cm_hier cfg/coverage.cfg ...
+//
+//   如果要全类型覆盖率：
+//     vcs ... -cm line+cond+fsm+tgl+branch -cm_hier cfg/coverage.cfg ...
+//
+//   两者都使用本文件控制层次范围，区别仅在 -cm 参数
 //---------------------------------------------------------------
 
 // 方案1：使用 +tree 深度限制（推荐）
 // 包含 {{ block_name }}_top 及其一级子模块（深度=2）
+// 编译命令：vcs ... -cm tgl -cm_hier cfg/coverage.cfg -F cfg/tb.f -top harness
 +tree harness.u_dut 2
 
 // 方案2：逐个指定（更精确控制）
@@ -111,6 +124,25 @@
 // +tree harness.u_dut
 // -tree harness.u_dut.u_datapath.u_alu
 // -tree harness.u_dut.u_mem_if.u_sram_ctrl.u_ecc
+
+// ---------------------------------------------------------------
+// 完整命令示例（只收集 top + 一级子模块的翻转覆盖率）：
+//
+// 编译：
+//   vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+//       -cm tgl \
+//       -cm_tgl portsonly \
+//       -cm_hier cfg/coverage.cfg \
+//       -F cfg/tb.f -top harness
+//
+// 运行：
+//   ./simv +UVM_TESTNAME=tc_base \
+//       -cm tgl \
+//       -cm_name tc_base -cm_dir ./cov
+//
+// 报告：
+//   urg -dir ./cov/*.vdb -report ./cov_report -format both
+// ---------------------------------------------------------------
 
 
 //===============================================================
