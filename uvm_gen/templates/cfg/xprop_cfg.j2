@@ -1,85 +1,171 @@
 //===============================================================
-// VCS Xprop Configuration File
-// Usage: vcs -xprop=tmerge,xprop.cfg  (or -xprop=xmerge,xprop.cfg)
+// VCS Xprop X 态传播配置文件
 //
-// Xprop modes:
-//   tmerge  - Most conservative, best for RTL verification (recommended)
-//   xmerge  - Moderate, good balance of accuracy and performance
-//   vmerge  - Least conservative, closest to Verilog semantics
+// *** 使用阶段：VCS 编译阶段 ***
+//
+// 功能：对 if/case/always 等条件语句做更精确的 X 态传播分析，
+//       帮助发现未初始化寄存器导致的设计 bug
+//
+// 编译命令示例：
+//   vcs -sverilog ... -xprop=tmerge,cfg/xprop.cfg    tmerge 模式（推荐）
+//   vcs -sverilog ... -xprop=xmerge,cfg/xprop.cfg    xmerge 模式
+//   vcs -sverilog ... -xprop=vmerge,cfg/xprop.cfg    vmerge 模式
+//
+// 三种模式对比：
+//   tmerge  - 最保守，X 传播最严格，最适合 RTL 验证（推荐）
+//   xmerge  - 适中，准确性和性能的平衡
+//   vmerge  - 最宽松，最接近 Verilog 标准语义
 //===============================================================
 
-//---------------------------------------------------------------
-// Module-level xprop mode assignment
-// Syntax: module <module_name> { xpropMode = tmerge|xmerge|vmerge; };
-//---------------------------------------------------------------
 
-// Apply tmerge to the entire DUT (recommended default):
+//===============================================================
+// 一、按模块指定 Xprop 模式
+//---------------------------------------------------------------
+// 语法:
+//   module <模块名> { xpropMode = tmerge|xmerge|vmerge; };
+//
+// 示例：
+//   对整个 DUT 顶层使用 tmerge（推荐默认配置）：
+//   module {{ block_name }}_top { xpropMode = tmerge; };
+//
+//   对某个子模块使用不同模式：
+//   module axi_slave_ctrl { xpropMode = xmerge; };
+//===============================================================
 // module {{ block_name }}_top { xpropMode = tmerge; };
 
-//---------------------------------------------------------------
-// Instance-level xprop mode
-// Syntax: instance <hier_path> { xpropMode = tmerge|xmerge|vmerge; };
-//---------------------------------------------------------------
-// Apply xmerge to a specific instance:
-// instance tb.u_dut.u_mem_ctrl { xpropMode = xmerge; };
-//
-// Apply vmerge to clock domain crossing logic:
-// instance tb.u_dut.u_cdc_sync { xpropMode = vmerge; };
 
+//===============================================================
+// 二、按实例层次指定 Xprop 模式
 //---------------------------------------------------------------
-// Exclude modules from xprop analysis
-// Syntax: module <module_name> { xpropOff; };
-//         instance <hier_path> { xpropOff; };
+// 语法:
+//   instance <层次路径> { xpropMode = tmerge|xmerge|vmerge; };
+//
+// 当同一个模块的不同实例需要不同策略时使用
+//
+// 示例：
+//   对存储控制器使用 xmerge：
+//   instance harness.u_dut.u_mem_ctrl { xpropMode = xmerge; };
+//
+//   对跨时钟域同步逻辑使用 vmerge（CDC 逻辑中 X 传播需宽松）：
+//   instance harness.u_dut.u_cdc_sync { xpropMode = vmerge; };
+//
+//   对关键数据通路使用最严格的 tmerge：
+//   instance harness.u_dut.u_datapath { xpropMode = tmerge; };
+//===============================================================
+// instance harness.u_dut.u_mem_ctrl { xpropMode = xmerge; };
+// instance harness.u_dut.u_cdc_sync { xpropMode = vmerge; };
+
+
+//===============================================================
+// 三、排除模块/实例（关闭 Xprop 分析）
 //---------------------------------------------------------------
-// Exclude third-party IP:
+// 语法:
+//   module <模块名> { xpropOff; };
+//   instance <层次路径> { xpropOff; };
+//
+// 使用场景：第三方 IP、模拟模型等不需要 X 传播检查
+//
+// 示例：
+//   排除第三方 IP 模块：
+//   module pll_ip { xpropOff; };
+//   module sram_model { xpropOff; };
+//   module pad_cell { xpropOff; };
+//
+//   排除特定实例：
+//   instance harness.u_dut.u_analog_ip { xpropOff; };
+//===============================================================
 // module pll_ip { xpropOff; };
 // module sram_model { xpropOff; };
-//
-// Exclude specific instance:
-// instance tb.u_dut.u_analog_ip { xpropOff; };
 
+
+//===============================================================
+// 四、按信号排除（关闭特定信号的 Xprop）
 //---------------------------------------------------------------
-// Signal-level control
-// Syntax: module <module_name> { xpropOffSignal = <signal_name>; };
-//---------------------------------------------------------------
-// Exclude specific signals from xprop:
-// module dut_top {
+// 语法:
+//   module <模块名> { xpropOffSignal = <信号名>; };
+//
+// 使用场景：DFT 信号、JTAG 信号等在功能仿真中无需 X 检查
+//
+// 示例：
+//   排除 DFT 和测试相关信号：
+//   module {{ block_name }}_top {
+//       xpropOffSignal = scan_mode;
+//       xpropOffSignal = scan_en;
+//       xpropOffSignal = test_en;
+//       xpropOffSignal = jtag_tdi;
+//       xpropOffSignal = jtag_tms;
+//   };
+//===============================================================
+// module {{ block_name }}_top {
 //     xpropOffSignal = scan_mode;
 //     xpropOffSignal = test_en;
-//     xpropOffSignal = jtag_tdi;
 // };
 
-//---------------------------------------------------------------
-// Process-level control (if/case/always)
-// Syntax: module <module_name> { xpropOffProcess = <label>; };
-//---------------------------------------------------------------
-// Exclude a labeled process:
-// module dut_top { xpropOffProcess = legacy_decoder; };
 
+//===============================================================
+// 五、按 always 块排除（关闭特定过程块的 Xprop）
 //---------------------------------------------------------------
-// Xprop with gate-level simulation
-// For gate-level sims, vmerge is typically more appropriate:
+// 语法:
+//   module <模块名> { xpropOffProcess = <标签名>; };
+//
+// 前提：RTL 中的 always 块需要有标签（label）
+//
+// 示例：
+//   RTL 中：  always @(*) begin : legacy_decoder ... end
+//   配置中：  module dut_top { xpropOffProcess = legacy_decoder; };
+//===============================================================
+// module {{ block_name }}_top { xpropOffProcess = legacy_decoder; };
+
+
+//===============================================================
+// 六、门级仿真配置
 //---------------------------------------------------------------
+// 门级网表通常使用 vmerge 模式（最接近实际硬件行为）
+//
+// 示例：
+//   module gate_level_netlist { xpropMode = vmerge; };
+//===============================================================
 // module gate_level_netlist { xpropMode = vmerge; };
 
-//---------------------------------------------------------------
-// Conditional X assignments
-// xpropCondOff: disable xprop for conditional assignments (if/case)
-// xpropCondOn:  enable xprop for conditional assignments (default)
-//---------------------------------------------------------------
-// module dut_top { xpropCondOff; };
 
+//===============================================================
+// 七、条件赋值控制
 //---------------------------------------------------------------
-// Xprop for multidriven signals
-// xpropMultidriven: enable xprop for multidriven nets
-//---------------------------------------------------------------
-// module dut_top { xpropMultidriven; };
-
-//---------------------------------------------------------------
-// Report configuration
-// Generate xprop analysis report:
-//   vcs -xprop=tmerge,xprop.cfg -xprop_report
+// xpropCondOff : 关闭条件赋值（if/case）的 X 传播
+// xpropCondOn  : 开启条件赋值的 X 传播（默认）
 //
-// Detailed report with signal-level info:
-//   vcs -xprop=tmerge,xprop.cfg -xprop_report=all
+// 使用场景：某些模块中 if/case 的 X 传播误报较多时可关闭
+//
+// 示例：
+//   module {{ block_name }}_top { xpropCondOff; };
+//===============================================================
+// module {{ block_name }}_top { xpropCondOff; };
+
+
+//===============================================================
+// 八、多驱动信号控制
 //---------------------------------------------------------------
+// xpropMultidriven : 对多驱动网络也启用 Xprop 分析
+//
+// 示例：
+//   module {{ block_name }}_top { xpropMultidriven; };
+//===============================================================
+// module {{ block_name }}_top { xpropMultidriven; };
+
+
+//===============================================================
+// 九、Xprop 分析报告
+//---------------------------------------------------------------
+// 编译时加以下选项可生成分析报告：
+//
+//   基础报告（模块级统计）：
+//   vcs -xprop=tmerge,cfg/xprop.cfg -xprop_report ...
+//
+//   详细报告（包含信号级信息）：
+//   vcs -xprop=tmerge,cfg/xprop.cfg -xprop_report=all ...
+//
+// 报告内容包括：
+//   - 哪些模块/信号启用了 Xprop
+//   - X 传播路径分析
+//   - 被排除的模块/信号列表
+//===============================================================

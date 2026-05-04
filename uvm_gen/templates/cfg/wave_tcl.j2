@@ -1,168 +1,275 @@
 #===============================================================
-# Verdi FSDB Wave Dump Script
-# Usage: In testbench or via +fsdb+autoflush in VCS
-#        Or: verdi -ssf wave.fsdb -sswr wave.tcl
+# Verdi FSDB 波形 Dump 脚本
+#
+# *** 使用阶段：仿真运行阶段 ***
+#
+# 本文件在仿真运���时加载，控制波形抓取行为。
+# 不参与编译，编译阶段需要加 Verdi PLI 库和 +define+FSDB。
+#
+# 编译命令示例：
+#   vcs -sverilog ... +define+FSDB \
+#       -P $VERDI_HOME/share/PLI/VCS/LINUX64/novas.tab \
+#          $VERDI_HOME/share/PLI/VCS/LINUX64/pli.a
+#
+# 运行命令示例：
+#   ./simv +UVM_TESTNAME=tc_base +wave_en=1
+#
+# Verdi 查看波形：
+#   verdi -ssf wave.fsdb -sswr wave.tcl
 #===============================================================
 
-#---------------------------------------------------------------
-# 1. Basic FSDB Dump
-#---------------------------------------------------------------
-# Open dump file
-fsdbDumpfile "wave.fsdb" -compress
 
-# Dump all signals from top with unlimited depth
+#===============================================================
+# 一、基础波形 Dump
+#---------------------------------------------------------------
+# fsdbDumpfile  : 指定输出文件名，-compress 启用压缩减小文件体积
+# fsdbDumpvars  : 指定 dump 范围，第一个参数为层次深度（0=无限深）
+#===============================================================
+fsdbDumpfile "wave.fsdb" -compress
 fsdbDumpvars 0 "tb"
 
-#---------------------------------------------------------------
-# 2. Hierarchical Selective Dump
-#---------------------------------------------------------------
-# Dump specific hierarchy with depth control
-# fsdbDumpvars 0 "tb.u_dut"                   ;# full depth
-# fsdbDumpvars 1 "tb.u_dut"                   ;# only top level of u_dut
-# fsdbDumpvars 2 "tb.u_dut.u_core"            ;# 2 levels deep
 
-# Dump multiple specific scopes
-# fsdbDumpvars 0 "tb.u_dut.u_core"
-# fsdbDumpvars 0 "tb.u_dut.u_mem_ctrl"
-# fsdbDumpvars 0 "tb.u_dut.u_bus"
+#===============================================================
+# 二、按层次选择性 Dump
+#---------------------------------------------------------------
+# 语法: fsdbDumpvars <深度> "<层次路径>"
+#   深度 0 = 无限深（dump 该层次下所有信号）
+#   深度 1 = 只 dump 当前层级
+#   深度 N = dump N 层
+#
+# 示例：
+#   dump 整个 DUT（无限深）：
+#   fsdbDumpvars 0 "harness.u_dut"
+#
+#   只 dump DUT 顶层端口信号：
+#   fsdbDumpvars 1 "harness.u_dut"
+#
+#   dump 核心模块 2 层深：
+#   fsdbDumpvars 2 "harness.u_dut.u_core"
+#
+#   同时 dump 多个模块（分别指定）：
+#   fsdbDumpvars 0 "harness.u_dut.u_core"
+#   fsdbDumpvars 0 "harness.u_dut.u_mem_ctrl"
+#   fsdbDumpvars 0 "harness.u_dut.u_bus"
+#===============================================================
+# fsdbDumpvars 0 "harness.u_dut"
+# fsdbDumpvars 1 "harness.u_dut"
+# fsdbDumpvars 2 "harness.u_dut.u_core"
 
+
+#===============================================================
+# 三、Dump 开关控制（减小文件体积）
 #---------------------------------------------------------------
-# 3. Dump Control (On/Off/Limit)
-#---------------------------------------------------------------
-# Pause dump (reduce file size during uninteresting phases)
+# fsdbDumpoff  : 暂停 dump（仿真继续但不记录波形）
+# fsdbDumpon   : 恢复 dump
+#
+# 使用场景：只 dump 感兴趣的时间段，跳过初始化等无关阶段
+#
+# 示例：
+#   跳过前 1000ns 的复位阶段，之后开始 dump：
+#   fsdbDumpoff
+#   run 1000ns
+#   fsdbDumpon
+#
+#   只 dump 中间一段时间窗口：
+#   fsdbDumpoff
+#   run 5000ns
+#   fsdbDumpon
+#   run 2000ns
+#   fsdbDumpoff
+#
+#   限制 dump 文件最大体积（单位 MB，超出后自动停止）：
+#   fsdbDumpSetMaxFileSize 2048
+#===============================================================
 # fsdbDumpoff
-
-# Resume dump
-# fsdbDumpon
-
-# Dump for a limited time window
-# fsdbDumpon
 # run 1000ns
-# fsdbDumpoff
+# fsdbDumpon
 
-# Limit max dump file size (in MB)
-# fsdbDumpSetMaxFileSize 2048
 
+#===============================================================
+# 四、信号过滤（Include/Exclude）
 #---------------------------------------------------------------
-# 4. Signal Filtering (Include/Exclude)
+# 按文件列表 dump 指定信号：
+#   fsdbDumpvarsByFile "signal_list.txt"
+#
+# 排除指定信号（减小文件体积，排除大数组等）：
+#   fsdbSuppress "<层次路径>"
+#
+# 只 dump 端口信号（不含内部信号）：
+#   fsdbDumpvars 0 "<层次>" +IO_Only
+#
+# 只 dump 寄存器 / 只 dump 线网：
+#   fsdbDumpvars 0 "<层次>" +Reg_Only
+#   fsdbDumpvars 0 "<层次>" +Wire_Only
+#
+# 示例：
+#   排除大容量 SRAM（减小 fsdb 文件体积）：
+#   fsdbSuppress "harness.u_dut.u_sram.mem"
+#   fsdbSuppress "harness.u_dut.u_rom.data"
+#
+#   只 dump DUT 的端口信号：
+#   fsdbDumpvars 0 "harness.u_dut" +IO_Only
+#===============================================================
+# fsdbSuppress "harness.u_dut.u_sram.mem"
+# fsdbDumpvars 0 "harness.u_dut" +IO_Only
+
+
+#===============================================================
+# 五、存储器 / 多维数组 Dump
 #---------------------------------------------------------------
-# Dump only signals matching a pattern
-# fsdbDumpvars 0 "tb.u_dut" +mda +all
-# fsdbDumpvarsByFile "signal_list.txt"
+# 语法:
+#   fsdbDumpMDA <深度> "<层次>"             dump 所有多维数组
+#   fsdbDumpvars <深度> "<层次>" +mda       带 MDA 选项 dump
+#   fsdbDumpMDAByRange "<路径>" <起始> <结束>  dump 指定地址范围
+#
+# 注意：存储器 dump 文件可能非常大，建议指定范围
+#
+# 示例：
+#   dump 指定 SRAM 的前 256 个地址：
+#   fsdbDumpMDAByRange "harness.u_dut.u_sram.mem" 0 255
+#
+#   dump 某个模块下所有多维数组：
+#   fsdbDumpMDA 0 "harness.u_dut.u_sram"
+#===============================================================
+# fsdbDumpMDAByRange "harness.u_dut.u_sram.mem" 0 255
+# fsdbDumpMDA 0 "harness.u_dut.u_sram"
 
-# Exclude specific signals (reduce file size)
-# fsdbSuppress "tb.u_dut.u_sram.mem"
-# fsdbSuppress "tb.u_dut.u_rom.data"
 
-# Dump only ports (no internal signals)
-# fsdbDumpvars 0 "tb.u_dut" +IO_Only
-
-# Dump only specific signal types
-# fsdbDumpvars 0 "tb.u_dut" +Reg_Only
-# fsdbDumpvars 0 "tb.u_dut" +Wire_Only
-
+#===============================================================
+# 六、SystemVerilog Interface / Struct Dump
 #---------------------------------------------------------------
-# 5. Memory / Array Dump
-#---------------------------------------------------------------
-# Dump memory arrays (can be very large!)
-# fsdbDumpMDA 0 "tb.u_dut.u_sram"             ;# dump all MDAs in scope
-# fsdbDumpvars 0 "tb.u_dut" +mda               ;# dump with MDA enabled
+# dump SV interface 信号：
+#   fsdbDumpvars 0 "<interface层次>" +all
+#
+# dump SVA（SystemVerilog Assertion）：
+#   fsdbDumpSVA 0 "tb"
+#
+# dump packed/unpacked struct：
+#   fsdbDumpvars 0 "<层次>" +struct
+#
+# 示例：
+#   dump 系统 interface 的所有信号：
+#   fsdbDumpvars 0 "harness.m_axi_if" +all
+#   fsdbDumpvars 0 "harness.m_apb_if" +all
+#
+#   dump 所有断言信息（用于 Verdi 断言调试）：
+#   fsdbDumpSVA 0 "tb"
+#===============================================================
+# fsdbDumpvars 0 "harness.m_axi_if" +all
+# fsdbDumpSVA 0 "tb"
 
-# Dump specific memory range
-# fsdbDumpMDAByRange "tb.u_dut.u_sram.mem" 0 255
 
+#===============================================================
+# 七、Power Domain Dump（UPF 电源域）
 #---------------------------------------------------------------
-# 6. SV Interface / Struct Dump
-#---------------------------------------------------------------
-# Dump SystemVerilog interfaces
-# fsdbDumpSVA 0 "tb"                           ;# dump all SVA
-# fsdbDumpvars 0 "tb.u_sys_if" +all            ;# dump interface signals
+# dump UPF 电源信息（低功耗验证场景）：
+#   fsdbDumpvars 0 "<层次>" +power
+#   fsdbDumpvars 0 "<层次>" +supply
+#
+# 示例：
+#   fsdbDumpvars 0 "harness.u_dut" +power
+#   fsdbDumpvars 0 "harness.u_dut" +supply
+#===============================================================
+# fsdbDumpvars 0 "harness.u_dut" +power
 
-# Dump packed/unpacked structs
-# fsdbDumpvars 0 "tb.u_dut" +struct
 
+#===============================================================
+# 八、回溯 Dump（Rewind，��新 dump 之前的时间段）
 #---------------------------------------------------------------
-# 7. Power Domain Dump
-#---------------------------------------------------------------
-# Dump UPF power information
-# fsdbDumpvars 0 "tb.u_dut" +power
-# fsdbDumpvars 0 "tb.u_dut" +supply
-
-#---------------------------------------------------------------
-# 8. Rewind Dump (Re-dump Previous Time Window)
-#   - Keep last N time units in a circular buffer
-#   - When triggered, flush the buffer to FSDB
-#   - Useful for capturing events before a failure
-#---------------------------------------------------------------
-# Enable rewind buffer (keep last 10us)
-# fsdbDumpRewind 10000 "tb"
-
-# In your testbench, trigger flush on error:
-# Example SV code:
+# 原理：开辟循环缓冲区，持续记录最近 N 个时间单位的波形。
+#       触发时将缓冲区内容写入 FSDB 文件。
+#       常用于：仿真跑很久后出错，需要查看出错前的波形。
+#
+# 语法:
+#   fsdbDumpRewind <缓冲时间> "<层次>"     开启回溯缓冲
+#   fsdbDumpRewindTrigger                  手动触发刷新
+#
+# 示例：
+#   保留最近 10us 的波形缓冲：
+#   fsdbDumpRewind 10000 "tb"
+#
+#   在 testbench 中��测到错误时触发回溯 dump（SV 代码）：
 #   initial begin
 #       @(posedge error_flag);
-#       $fsdbDumpFlush;         // flush rewind buffer to file
-#       $fsdbDumpon;            // continue normal dump after error
+#       $fsdbDumpFlush;         // 将缓冲区写入文件
+#       $fsdbDumpon;            // 之后继续正常 dump
 #       #1000ns;
 #       $fsdbDumpoff;
 #   end
+#
+#   从 TCL 手动触发：
+#   fsdbDumpRewindTrigger
+#===============================================================
+# fsdbDumpRewind 10000 "tb"
 
-# Alternative: trigger from TCL
-# fsdbDumpRewindTrigger          ;# manually trigger buffer flush
 
+#===============================================================
+# 九、Dump 状态查询
 #---------------------------------------------------------------
-# 9. Dump Status Query
-#---------------------------------------------------------------
-# Check current dump status
+# 查看当前 dump 状态（是否在 dump、文件名、大小等）：
+#   fsdbDumpStatus
+#
+# 查询 dump 文件信息：
+#   fsdbDumpFileInfo "wave.fsdb"
+#
+# 检查 dump 是否处于活跃状态：
+#   fsdbIsDumping
+#===============================================================
 # fsdbDumpStatus
-
-# Query dump file info
 # fsdbDumpFileInfo "wave.fsdb"
 
-# Check if dump is active
-# fsdbIsDumping
 
+#===============================================================
+# 十、条件触发 Dump（按时间或事件）
 #---------------------------------------------------------------
-# 10. Conditional / Event-Triggered Dump
-#---------------------------------------------------------------
-# Start dump at specific simulation time
-# run 500ns
-# fsdbDumpon
-# fsdbDumpvars 0 "tb.u_dut"
+# 在特定仿真时间开始 dump：
+#   run 500ns
+#   fsdbDumpon
+#   fsdbDumpvars 0 "harness.u_dut"
+#
+# 通过 TCL 回调实现事件触发 dump：
+#   proc dump_on_error {} {
+#       fsdbDumpon
+#       fsdbDumpvars 0 "harness.u_dut"
+#       run 2000ns
+#       fsdbDumpoff
+#   }
+#
+# 配合 UVM severity 触发（severity >= UVM_ERROR 时回溯 dump）：
+#   proc dump_on_uvm_error {severity} {
+#       if {$severity >= 300} {
+#           fsdbDumpRewindTrigger
+#           fsdbDumpon
+#       }
+#   }
+#===============================================================
 
-# Dump on specific event (TCL callback approach)
-# proc dump_on_error {} {
-#     fsdbDumpon
-#     fsdbDumpvars 0 "tb.u_dut"
-#     run 2000ns
-#     fsdbDumpoff
-# }
 
-# Conditional dump with UVM severity
-# proc dump_on_uvm_error {severity} {
-#     if {$severity >= 300} {
-#         fsdbDumpRewindTrigger
-#         fsdbDumpon
-#     }
-# }
-
+#===============================================================
+# 十一、自动刷新配置（防止仿真崩溃丢失波形）
 #---------------------------------------------------------------
-# 11. Auto-flush Configuration
-#---------------------------------------------------------------
-# Flush FSDB periodically (prevent data loss on crash)
+# 立即刷新一次（将内存中的波形写入磁盘）：
 fsdbDumpFlush
 
-# Set auto-flush interval (every 1000 time units)
+# 设置自动刷新间隔（每 1000 个时间单位刷新一次）：
 # fsdbAutoflushSetInterval 1000
+#
+# 也可以在 VCS 编译时启用自动刷新：
+#   vcs ... +fsdb+autoflush
+#===============================================================
 
+
+#===============================================================
+# 十二、FSDB+ 扩展功能
 #---------------------------------------------------------------
-# 12. FSDB+ Features (Extended)
-#---------------------------------------------------------------
-# Transaction recording (for UVM sequences)
+# dump UVM transaction 记录（sequence 级别的事务跟踪）：
+#   fsdbDumpvars 0 "tb" +transaction
+#
+# dump force/release 操作记录：
+#   fsdbDumpvars 0 "tb" +force
+#
+# dump 毛刺检测信息：
+#   fsdbDumpvars 0 "harness.u_dut" +glitch
+#===============================================================
 # fsdbDumpvars 0 "tb" +transaction
-
-# Force/release recording
 # fsdbDumpvars 0 "tb" +force
-
-# Glitch detection
-# fsdbDumpvars 0 "tb.u_dut" +glitch

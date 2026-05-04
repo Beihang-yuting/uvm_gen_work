@@ -1,75 +1,150 @@
 //===============================================================
-// VCS InitReg Configuration File
-// Usage: vcs -initreg+<config_file> or vcs -initreg+random
+// VCS InitReg 寄存器初始化配置文件
+//
+// *** 使用阶段：VCS 编译阶段 ***
+//
+// 功能：在仿真开始时将寄存器/存储器初始化为指定值，
+//       用于检测 X 态传播问题和未初始化变量导致的 bug
+//
+// 编译命令示例：
+//   vcs -sverilog ... -initreg+cfg/initreg.cfg    从配置文件读取
+//   vcs -sverilog ... -initreg+random              全局随机初始化
+//   vcs -sverilog ... -initreg+0                   全局初始化为 0
 //===============================================================
 
+
+//===============================================================
+// 一、全局初始化策略
 //---------------------------------------------------------------
-// Global initialization strategy
-// Options: random, 0, 1, x, z
-//---------------------------------------------------------------
+// 可选值: random（随机）、0、1、x、z
+// 推荐使用 random，每次仿真用不同 seed 发现潜在问题
+//===============================================================
 +initreg+random
 
-//---------------------------------------------------------------
-// Module/instance level initialization
-// Syntax: +initreg+<value>+module+<module_name>
-//         +initreg+<value>+instance+<hier_path>
-//---------------------------------------------------------------
-// Initialize all regs in a specific module to 0:
-// +initreg+0+module+dut_top
-//
-// Initialize regs in a specific instance to 1:
-// +initreg+1+instance+tb.u_dut.u_core
-//
-// Random init for a specific sub-module:
-// +initreg+random+instance+tb.u_dut.u_mem_ctrl
 
+//===============================================================
+// 二、按模块/实例层次指定初始化值
 //---------------------------------------------------------------
-// Signal name pattern matching
-// Syntax: +initreg+<value>+signal+<pattern>
+// 语法:
+//   +initreg+<值>+module+<模块名>         按模块名（所有实例）
+//   +initreg+<值>+instance+<层次路径>     按具体实例
+//
+// 示例：
+//   将 DUT 顶层所有寄存器初始化为 0：
+//   +initreg+0+module+{{ block_name }}_top
+//
+//   将某个子模块实例随机初始化：
+//   +initreg+random+instance+harness.u_dut.u_core
+//
+//   将复位相关模块初始化为 1（模拟上电复位）：
+//   +initreg+1+instance+harness.u_dut.u_rst_ctrl
+//===============================================================
+// +initreg+0+module+{{ block_name }}_top
+// +initreg+random+instance+harness.u_dut.u_core
+// +initreg+1+instance+harness.u_dut.u_rst_ctrl
+
+
+//===============================================================
+// 三、按信号名模式匹配
 //---------------------------------------------------------------
-// Initialize all signals matching a pattern:
+// 语法:
+//   +initreg+<值>+signal+<通配符模式>
+//
+// 支持 * 通配符，可匹配任意信号名
+//
+// 示例：
+//   所有复位相关信号初始化为 0：
+//   +initreg+0+signal+*rst*
+//
+//   所有使能信号初始化为 1：
+//   +initreg+1+signal+*_en
+//
+//   所有计数器随机初始化：
+//   +initreg+random+signal+*cnt*
+//
+//   所有状态机信号初始化为 0：
+//   +initreg+0+signal+*state*
+//   +initreg+0+signal+*fsm*
+//===============================================================
 // +initreg+0+signal+*rst*
 // +initreg+1+signal+*_en
 // +initreg+random+signal+*cnt*
 
+
+//===============================================================
+// 四、存储器（Memory）初始化
 //---------------------------------------------------------------
-// Memory initialization
-// Syntax: +initreg+<value>+memory+<hier_path>
-//---------------------------------------------------------------
-// Initialize memory array to 0:
-// +initreg+0+memory+tb.u_dut.u_sram.mem
+// 语法:
+//   +initreg+<值>+memory+<层次路径>
 //
-// Random init for all memories:
+// 示例：
+//   将指定 SRAM 初始化为全 0：
+//   +initreg+0+memory+harness.u_dut.u_sram.mem
+//
+//   所有存储器随机初始化：
+//   +initreg+random+memory+*
+//
+//   ROM 区域初始化为全 1：
+//   +initreg+1+memory+harness.u_dut.u_rom.data
+//===============================================================
+// +initreg+0+memory+harness.u_dut.u_sram.mem
 // +initreg+random+memory+*
 
+
+//===============================================================
+// 五、排除规则（不初始化指定对象）
 //---------------------------------------------------------------
-// Exclusion rules
-// Syntax: +noiinitreg+module+<module_name>
-//         +noiinitreg+instance+<hier_path>
-//         +noiinitreg+signal+<pattern>
-//---------------------------------------------------------------
-// Exclude a module from initialization:
+// 语法:
+//   +noiinitreg+module+<模块名>
+//   +noiinitreg+instance+<层次路径>
+//   +noiinitreg+signal+<通配符模式>
+//
+// 使用场景：某些模块有自己的初始化逻辑，不需要工具干预
+//
+// 示例：
+//   排除时钟生成模块（避免干扰时钟逻辑）：
+//   +noiinitreg+module+clock_gen
+//
+//   排除 PLL 实例：
+//   +noiinitreg+instance+harness.u_dut.u_pll
+//
+//   排除所有时钟信号：
+//   +noiinitreg+signal+*clk*
+//
+//   排除异步 FIFO 的格雷码指针（有专门的复位逻辑）：
+//   +noiinitreg+signal+*gray_ptr*
+//===============================================================
 // +noiinitreg+module+clock_gen
-//
-// Exclude specific instance:
-// +noiinitreg+instance+tb.u_dut.u_pll
-//
-// Exclude signals matching pattern:
+// +noiinitreg+instance+harness.u_dut.u_pll
 // +noiinitreg+signal+*clk*
 
+
+//===============================================================
+// 六、按位宽筛选初始化
 //---------------------------------------------------------------
-// Width-based initialization
-// Syntax: +initreg+<value>+width+<min>+<max>
-//---------------------------------------------------------------
-// Initialize only 1-bit regs to 0 (flops):
-// +initreg+0+width+1+1
+// 语法:
+//   +initreg+<值>+width+<最小位宽>+<最大位宽>
 //
-// Initialize wide regs (32-bit+) to random:
+// 示例：
+//   只初始化 1-bit 寄存器（触发器）为 0：
+//   +initreg+0+width+1+1
+//
+//   32-bit 及以上的宽寄存器随机初始化：
+//   +initreg+random+width+32+1024
+//
+//   2-8 bit 寄存器初始化为全 1：
+//   +initreg+1+width+2+8
+//===============================================================
+// +initreg+0+width+1+1
 // +initreg+random+width+32+1024
 
+
+//===============================================================
+// 七、二态/四态控制
 //---------------------------------------------------------------
-// Two-state / four-state control
-// +initreg+2state   : init to 0/1 only (no x/z)
-// +initreg+4state   : allow x/z init values
-//---------------------------------------------------------------
+// +initreg+2state   : 只使用 0/1 初始化（不会出现 x/z）
+// +initreg+4state   : 允许 x/z 作为初始值
+//
+// 推荐：RTL 仿真用 2state，门级仿真用 4state
+//===============================================================
 // +initreg+2state
