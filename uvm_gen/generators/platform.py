@@ -53,6 +53,7 @@ class PlatformGenerator(BaseGenerator):
             ("tb_f.j2", "tb.f"),
             ("initreg_cfg.j2", "initreg.cfg"),
             ("xprop_cfg.j2", "xprop.cfg"),
+            ("coverage_cfg.j2", "coverage.cfg"),
             ("wave_tcl.j2", "wave.tcl"),
         ]:
             content = self.render_template(f"cfg/{tpl_name}", file_name=out_name, agents=self.cfg.agents)

@@ -1,0 +1,292 @@
+//===============================================================
+// VCS 覆盖率收集配置文件
+//
+// *** 使用阶段：编译阶段 + 运行阶段 ***
+//
+// 功能：控制 VCS 代码覆盖率（Code Coverage）的收集范围和策略，
+//       包括行覆盖率、条件覆盖率、翻转覆盖率、状态机覆盖率、分支覆盖率等
+//
+// 编译命令示例：
+//   vcs -sverilog ... -cm line+cond+fsm+tgl+branch    启用覆盖率
+//   vcs -sverilog ... -cm line+cond+fsm+tgl+branch \
+//       -cm_hier cfg/coverage.cfg                      使用本配置文件控制收集范围
+//
+// 运行命令示例：
+//   ./simv -cm line+cond+fsm+tgl+branch                收集覆盖率
+//   ./simv -cm line+cond+fsm+tgl+branch -cm_name test1 指定数据库名称
+//   ./simv -cm line+cond+fsm+tgl+branch -cm_dir ./cov  指定输出目录
+//
+// 合并覆盖率报告：
+//   urg -dir ./cov/*.vdb -report ./cov_report -format both
+//   firefox ./cov_report/dashboard.html
+//===============================================================
+
+
+//===============================================================
+// 一、覆盖率类型说明
+//---------------------------------------------------------------
+// VCS 支持以下代码覆盖率类型（通过 -cm 选项组合使用）：
+//
+//   line   : 行覆盖率 — 每行代码是否被执行
+//   cond   : 条件覆盖率 — if/case/三元表达式各分支是否被覆盖
+//   fsm    : 状态机覆盖率 — 状态跳转是否被覆盖
+//   tgl    : 翻转覆盖率 — 信号 0->1 和 1->0 是否都发生过
+//   branch : 分支覆盖率 — if/else/case 各分支是否被执行
+//   assert : 断言覆盖率 — SVA 断言的覆盖情况
+//
+// 常用组合：
+//   -cm line+cond+fsm+tgl+branch         完整代码覆盖率
+//   -cm tgl                               只收集翻转覆盖率
+//   -cm line+cond+branch                  逻辑覆盖率（不含翻转和 FSM）
+//   -cm line+cond+fsm+tgl+branch+assert  全部类型
+//===============================================================
+
+
+//===============================================================
+// 二、按模块/实例层次选择收集范围
+//---------------------------------------------------------------
+// 语法:
+//   +tree  <层次路径>           包含该层次及其所有子层次
+//   +tree  <层次路径>  <深度>   包含该层次，限制深度（1=仅当前层）
+//   -tree  <层次路径>           排除该层次及其所有子层次
+//   +module <模块名>            包含指定模块（所有实例）
+//   -module <模块名>            排除指定模块（所有实例）
+//
+// 深度说明：
+//   深度 1 = 仅当前模块，不含子模块
+//   深度 2 = 当前模块 + 一级子模块
+//   深度 0 = 无限深（等同于不指定深度）
+//===============================================================
+
+// 示例：只收集 DUT 范围内的覆盖率（排除 TB 组件）
+// +tree harness.u_dut
+
+
+//===============================================================
+// 三、翻转覆盖率（Toggle Coverage）专项配置
+//---------------------------------------------------------------
+// 翻转覆盖率检查每个信号是否发生过 0->1 和 1->0 的跳变
+// 对于多 bit 信号，默认检查每一位的翻转
+//
+// 常用选项（编译时）：
+//   -cm_tgl portsonly          只收集端口信号的翻转（不含内部信号）
+//   -cm_tgl structarr          收集 struct/array 成员的翻转
+//   -cm_tgl fullreg            收集多 bit 寄存器每一位的翻转
+//===============================================================
+
+// 示例：只收集 DUT 端口信号的翻转覆盖率
+// 编译时加: -cm tgl -cm_tgl portsonly -cm_hier cfg/coverage.cfg
+
+
+//===============================================================
+// 四、实际项目配置示例
+//---------------------------------------------------------------
+// 场景：{{ block_name }}_top 下有 6 个一级子模块：
+//   {{ block_name }}_top
+//   ├── u_ctrl       （控制模块）
+//   ├── u_datapath   （数据通路）
+//   ├── u_mem_if     （存储接口）
+//   ├── u_reg_bank   （寄存器组）
+//   ├── u_clk_rst    （时钟复位）
+//   └── u_misc       （杂项逻辑）
+//
+// 需求：只收集 top 层和所有一级子模块的翻转覆盖率
+//       不递归收集二级及更深层次
+//---------------------------------------------------------------
+
+// 方案1：使用 +tree 深度限制（推荐）
+// 包含 {{ block_name }}_top 及其一级子模块（深度=2）
++tree harness.u_dut 2
+
+// 方案2：逐个指定（更精确控制）
+// +tree harness.u_dut             1
+// +tree harness.u_dut.u_ctrl      1
+// +tree harness.u_dut.u_datapath  1
+// +tree harness.u_dut.u_mem_if    1
+// +tree harness.u_dut.u_reg_bank  1
+// +tree harness.u_dut.u_clk_rst   1
+// +tree harness.u_dut.u_misc      1
+
+// 方案3：先全包含再排除不需要的深层模块
+// +tree harness.u_dut
+// -tree harness.u_dut.u_datapath.u_alu
+// -tree harness.u_dut.u_mem_if.u_sram_ctrl.u_ecc
+
+
+//===============================================================
+// 五、排除规则
+//---------------------------------------------------------------
+// 排除不需要收集覆盖率的模块/实例
+// 常见排除对象：第三方 IP、仿真模型、时钟生成、调试逻辑
+//===============================================================
+
+// 排除第三方 IP 模块（所有实例）
+// -module pll_model
+// -module sram_model
+// -module pad_cell
+// -module io_buffer
+
+// 排除特定实例
+// -tree harness.u_dut.u_pll
+// -tree harness.u_dut.u_analog_ip
+
+// 排除 TB 组件（不收集验证环境的覆盖率）
+-tree harness.m_*
+
+
+//===============================================================
+// 六、按模块名包含/排除
+//---------------------------------------------------------------
+// +module 和 -module 按模块名匹配，影响所有实例
+// 适合对同一类模块统一配置
+//===============================================================
+
+// 只收集特定模块的覆盖率
+// +module {{ block_name }}_top
+// +module {{ block_name }}_ctrl
+// +module {{ block_name }}_datapath
+
+// 排除所有同名模块的覆盖率
+// -module clock_divider
+// -module sync_cell
+// -module reset_sync
+
+
+//===============================================================
+// 七、条件覆盖率细化配置
+//---------------------------------------------------------------
+// 编译时选项：
+//   -cm_cond basic             基本条件覆盖率
+//   -cm_cond allops            所有操作符的条件覆盖率
+//   -cm_cond full              完整条件覆盖率（包括子表达式）
+//   -cm_cond obsv              可观测条件覆盖率（推荐，避免冗余）
+//
+// 示例：
+//   vcs ... -cm cond -cm_cond obsv -cm_hier cfg/coverage.cfg
+//===============================================================
+
+
+//===============================================================
+// 八、状态机覆盖率配置
+//---------------------------------------------------------------
+// VCS 自动识别 FSM 结构并收集状态/转换覆盖率
+//
+// 编译时选项：
+//   -cm_fsmcfg <文件>          指定 FSM 配置文件
+//   -cm_fsmresetstate          包含复位状态的覆盖
+//
+// FSM 配置文件语法：
+//   module <模块名> {
+//       fsm_variable = <信号名>;    指定 FSM 状态变量
+//       fsm_arc_reset = on;         包含复位弧
+//   };
+//
+// 示例：
+//   module {{ block_name }}_ctrl {
+//       fsm_variable = curr_state;
+//       fsm_arc_reset = on;
+//   };
+//===============================================================
+
+
+//===============================================================
+// 九、覆盖率收集的运行时控制
+//---------------------------------------------------------------
+// 在仿真代码中动态控制覆盖率收集开关
+//
+// SystemVerilog 系统函数：
+//   $set_coverage_db_name("test_name");   设置覆盖率数据库名
+//   $set_toggle_region("harness.u_dut");  设置翻转覆盖率范围
+//   $toggle_start();                      开始收集翻转
+//   $toggle_stop();                       停止收集翻转
+//   $toggle_reset();                      重置翻转数据
+//
+// 使用场景：复位阶段不收集，功能阶段才收集
+//
+// 示例（在 base_test 中）：
+//   task main_phase(uvm_phase phase);
+//       // 复位完成后开始收集翻转覆盖率
+//       $set_toggle_region("harness.u_dut");
+//       $toggle_start();
+//
+//       // ... 运行测试 ...
+//
+//       // 测试结束前停止收集
+//       $toggle_stop();
+//   endtask
+//===============================================================
+
+
+//===============================================================
+// 十、覆盖率合并与报告
+//---------------------------------------------------------------
+// 多个 test 的覆盖率需要合并后才能看到整体覆盖情况
+//
+// 合并命令：
+//   urg -dir ./cov/test1.vdb ./cov/test2.vdb \
+//       -report ./cov_report -format both
+//
+// 批量合并（所有 .vdb）：
+//   urg -dir ./cov/*.vdb -report ./cov_report -format both
+//
+// 常用 urg 选项：
+//   -metric line+cond+fsm+tgl+branch   指定报告的覆盖率类型
+//   -elfile exclude.el                  排除列表文件
+//   -plan coverage_plan.hvp             覆盖率计划文件
+//   -format both                        同时生成 HTML 和文本报告
+//   -group merge_across_scopes          跨实例合并同名模块
+//
+// 排除列表文件 (exclude.el) 语法：
+//   module clock_gen -line -cond -fsm -tgl -branch
+//   instance harness.u_dut.u_pll -allcov
+//   block_name.sv 100-120 -line         排除指定行范围
+//
+// 查看报告：
+//   firefox ./cov_report/dashboard.html
+//   cat ./cov_report/modlist.txt        文本摘要
+//===============================================================
+
+
+//===============================================================
+// 十一、完整编译和运行命令参考
+//---------------------------------------------------------------
+//
+// 【编译阶段】
+//
+// 基础覆盖率编译：
+//   vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+//       -cm line+cond+fsm+tgl+branch \
+//       -cm_hier cfg/coverage.cfg \
+//       -F cfg/tb.f -top harness
+//
+// 翻转覆盖率 + 只收集端口：
+//   vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+//       -cm tgl -cm_tgl portsonly \
+//       -cm_hier cfg/coverage.cfg \
+//       -F cfg/tb.f -top harness
+//
+// 全类型覆盖率 + 条件覆盖率优化：
+//   vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+//       -cm line+cond+fsm+tgl+branch+assert \
+//       -cm_cond obsv \
+//       -cm_hier cfg/coverage.cfg \
+//       -F cfg/tb.f -top harness
+//
+// 【运行阶段】
+//
+// 单个测试收集覆盖率：
+//   ./simv +UVM_TESTNAME=tc_basic \
+//       -cm line+cond+fsm+tgl+branch \
+//       -cm_name tc_basic \
+//       -cm_dir ./cov
+//
+// 回归测试批量收集（每个 test 独立数据库）：
+//   ./simv +UVM_TESTNAME=tc_read  -cm line+cond+fsm+tgl+branch -cm_name tc_read  -cm_dir ./cov
+//   ./simv +UVM_TESTNAME=tc_write -cm line+cond+fsm+tgl+branch -cm_name tc_write -cm_dir ./cov
+//   ./simv +UVM_TESTNAME=tc_burst -cm line+cond+fsm+tgl+branch -cm_name tc_burst -cm_dir ./cov
+//
+// 【报告阶段】
+//
+// 合并所有测试的覆盖率并生成报告：
+//   urg -dir ./cov/*.vdb -report ./cov_report -format both
+//===============================================================
