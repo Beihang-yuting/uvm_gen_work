@@ -93,80 +93,68 @@
 // 需求：只收集 top 层和所有一级子模块的翻转覆盖率
 //       不递归收集二级及更深层次
 //
-// 说明：有两种方式控制覆盖率类型
+// 说明：
+//   本配置文件（-cm_hier）控制收集的 **层次范围**（哪些模块/深度）
+//   覆盖率 **类型** 由编译命令的 -cm 参数决定
 //
-//   方式 A：编译命令 -cm 只写需要的类型（简单直接）
-//     vcs ... -cm tgl -cm_hier cfg/coverage.cfg ...
-//
-//   方式 B：编译命令 -cm 全开，配置文件中逐条禁用不需要的类型（更灵活）
-//     vcs ... -cm line+cond+fsm+tgl+branch -cm_hier cfg/coverage.cfg ...
-//     配置文件中：+tree harness.u_dut 2 -line -cond -fsm -branch
-//     这样即使编译全开，该层次也只收集 tgl
-//
-//   方式 B 的优势：同一份配置文件中可以对不同模块收集不同类型的覆盖率
-//     例如：控制模块收集 line+cond+fsm，数据通路只收集 tgl
+//   只要翻转覆盖率：  vcs ... -cm tgl -cm_hier cfg/coverage.cfg
+//   全类型覆盖率：    vcs ... -cm line+cond+fsm+tgl+branch -cm_hier cfg/coverage.cfg
 //---------------------------------------------------------------
 
 // ---------------------------------------------------------------
-// 方案1：配置文件控制类型 — 只收集翻转覆盖率（推荐）
-// 编译命令用全类型：-cm line+cond+fsm+tgl+branch
-// 配置文件用 -line -cond -fsm -branch 关闭不需要的，只留 tgl
+// 方案1：编译命令控制类型 + 配置文件控制层次（推荐，最可靠）
+// 编译命令只写 -cm tgl，配置文件只控制深度
 // ---------------------------------------------------------------
-+tree harness.u_dut 2 -line -cond -fsm -branch
++tree harness.u_dut 2
 
 // ---------------------------------------------------------------
-// 方案2：配置文件控制类型 — 不同模块收集不同类型
-// 编译命令用全类型：-cm line+cond+fsm+tgl+branch
+// 方案2：逐个指定层次（更精确控制每个子模块）
+// 编译命令只写 -cm tgl
 // ---------------------------------------------------------------
-// 控制模块：收集行覆盖率 + 条件覆盖率 + FSM
-// +tree harness.u_dut.u_ctrl      1 -tgl -branch
-//
-// 数据通路：只收集翻转覆盖率
-// +tree harness.u_dut.u_datapath  1 -line -cond -fsm -branch
-//
-// 寄存器组：收集全部类型
+// +tree harness.u_dut             1
+// +tree harness.u_dut.u_ctrl      1
+// +tree harness.u_dut.u_datapath  1
+// +tree harness.u_dut.u_mem_if    1
 // +tree harness.u_dut.u_reg_bank  1
-//
-// 时钟复位模块：不收集任何覆盖率
-// -tree harness.u_dut.u_clk_rst
+// +tree harness.u_dut.u_clk_rst   1
+// +tree harness.u_dut.u_misc      1
 
 // ---------------------------------------------------------------
-// 方案3：编译命令控制类型 — 全局只收集 tgl（简单场景）
-// 编译命令只写 -cm tgl，配置文件只控制层次
+// 方案3：先全包含再排除不需要的深层模块
+// 编译命令只写 -cm tgl
 // ---------------------------------------------------------------
-// +tree harness.u_dut 2
-
-// ---------------------------------------------------------------
-// 方案4：逐个指定层次（最精确）
-// ---------------------------------------------------------------
-// +tree harness.u_dut             1 -line -cond -fsm -branch
-// +tree harness.u_dut.u_ctrl      1 -line -cond -fsm -branch
-// +tree harness.u_dut.u_datapath  1 -line -cond -fsm -branch
-// +tree harness.u_dut.u_mem_if    1 -line -cond -fsm -branch
-// +tree harness.u_dut.u_reg_bank  1 -line -cond -fsm -branch
-// +tree harness.u_dut.u_clk_rst   1 -line -cond -fsm -branch
-// +tree harness.u_dut.u_misc      1 -line -cond -fsm -branch
-
-// ---------------------------------------------------------------
-// 方案5：先全包含再排除不需要的深层模块
-// ---------------------------------------------------------------
-// +tree harness.u_dut                   -line -cond -fsm -branch
+// +tree harness.u_dut
 // -tree harness.u_dut.u_datapath.u_alu
 // -tree harness.u_dut.u_mem_if.u_sram_ctrl.u_ecc
 
 // ---------------------------------------------------------------
-// 完整命令示例（配置文件控制类型，只收 tgl）：
+// 方案4：不同模块收集不同类型（需要多次编译，每次不同 -cm 和 -cm_hier）
+//
+// 第一次编译：只收集 DUT 翻转覆盖率
+//   vcs ... -cm tgl -cm_hier cfg/coverage_tgl.cfg ...
+//   coverage_tgl.cfg 内容：+tree harness.u_dut 2
+//
+// 第二次编译：只收集控制模块的行/条件覆盖率
+//   vcs ... -cm line+cond -cm_hier cfg/coverage_ctrl.cfg ...
+//   coverage_ctrl.cfg 内容：+tree harness.u_dut.u_ctrl 0
+//
+// 合并报告：
+//   urg -dir ./cov_tgl/*.vdb ./cov_ctrl/*.vdb -report ./cov_report
+// ---------------------------------------------------------------
+
+// ---------------------------------------------------------------
+// 完整命令示例（只收集 top + 一级子模块的翻转覆盖率）：
 //
 // 编译：
 //   vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
-//       -cm line+cond+fsm+tgl+branch \
+//       -cm tgl \
 //       -cm_tgl portsonly \
 //       -cm_hier cfg/coverage.cfg \
 //       -F cfg/tb.f -top harness
 //
 // 运行：
 //   ./simv +UVM_TESTNAME=tc_base \
-//       -cm line+cond+fsm+tgl+branch \
+//       -cm tgl \
 //       -cm_name tc_base -cm_dir ./cov
 //
 // 报告：
