@@ -20,9 +20,13 @@ class {{ name }}_agent extends uvm_agent;
 
     common_self_debug_scb#({{ name }}_trans)          m_debug_scb;
 
+    virtual {{ name }}_if                                m_vif;
+
     extern function new(string name="{{ name }}_agent", uvm_component parent=null);
     extern virtual function void build_phase(uvm_phase phase);
     extern virtual function void connect_phase(uvm_phase phase);
+    extern virtual task run_phase(uvm_phase phase);
+    extern virtual task reset_callback();
 
 endclass
 
@@ -36,6 +40,10 @@ function void {{ name }}_agent::build_phase(uvm_phase phase);
     if(this.m_cfg == null) begin
         `uvm_info(get_full_name, "{{ block_name }} does not set agent_cfg, creating default", UVM_NONE);
         this.m_cfg = {{ name }}_agt_cfg::type_id::create("m_cfg", this);
+    end
+
+    if(!uvm_config_db#(virtual {{ name }}_if)::get(this, "", "m_vif", m_vif)) begin
+        `uvm_fatal(get_full_name, "virtual interface must be set for agent!!!")
     end
 
     `uvm_info(get_full_name, $sformatf("agent work at mode=%s build_phase start", this.m_cfg.m_mode.name), UVM_NONE);
@@ -104,5 +112,22 @@ function void {{ name }}_agent::connect_phase(uvm_phase phase);
         this.m_mon.m_debug_scb = this.m_debug_scb;
     end
 endfunction : connect_phase
+
+task {{ name }}_agent::run_phase(uvm_phase phase);
+    super.run_phase(phase);
+    forever begin
+        @(negedge m_vif.rst_n);
+        if(m_cfg.m_rst_flush_fifo) begin
+            m_mon_fifo.flush();
+            m_req_fifo.flush();
+            m_rsp_fifo.flush();
+            `uvm_info(get_full_name, "reset: FIFOs flushed", UVM_MEDIUM)
+        end
+        reset_callback();
+    end
+endtask : run_phase
+
+task {{ name }}_agent::reset_callback();
+endtask : reset_callback
 
 `endif

@@ -17,6 +17,7 @@ class {{ name }}_agt_cfg extends uvm_object;
     agent_mode_e            m_mode = AGENT_MASTER;
     bit                     m_auto_start_seq = 0;
     bit                     m_self_debug_en  = 0;
+    bit                     m_rst_flush_fifo = 1;   // 复位时清空 FIFO（默认开启）
     uvm_active_passive_enum m_is_active = UVM_ACTIVE;
 
     function new(string name = "{{ name }}_agt_cfg");
