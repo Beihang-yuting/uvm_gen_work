@@ -193,7 +193,9 @@ top/
 │   ├── top_env_cfg.sv
 │   ├── top_rm.sv                        # Reference Model
 │   ├── top_checker.sv                   # Checker/Scoreboard
-│   └── top_vsqr.sv                      # Virtual Sequencer
+│   ├── top_vsqr.sv                      # Virtual Sequencer
+│   ├── top_assert.sv                    # SVA 断言参考模板（未加入 filelist）
+│   └── top_cov.sv                       # 覆盖率参考模板（未加入 filelist）
 ├── common/
 │   ├── common_lib_pkg.f
 │   ├── common_lib_pkg.sv
@@ -211,9 +213,10 @@ top/
 │   ├── dut.f                            # DUT filelist
 │   ├── env.f                            # 环境 filelist
 │   ├── tb.f                             # 顶层 filelist
-│   ├── initreg.cfg                      # VCS 寄存器初始化配置
-│   ├── xprop.cfg                        # VCS X 传播配置
-│   └── wave.tcl                         # Verdi fsdb dump 脚本
+│   ├── initreg.cfg                      # VCS 寄存器初始化配置（编译阶段）
+│   ├── xprop.cfg                        # VCS X 传播配置（编译阶段）
+│   ├── coverage.cfg                     # VCS 覆盖率收集配置（编译+运行阶段）
+│   └── wave.tcl                         # Verdi fsdb dump 脚本（运行阶段）
 └── doc/
 ```
 
@@ -276,6 +279,25 @@ vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
     -top harness
 ```
 
+### 带覆盖率收集
+
+```bash
+# 编译（启用覆盖率 + 层次配置）
+vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+    -cm line+cond+fsm+tgl+branch \
+    -cm_hier cfg/coverage.cfg \
+    -f cfg/tb.f \
+    -top harness
+
+# 运行（收集覆盖率）
+./simv +UVM_TESTNAME=tc_base \
+    -cm line+cond+fsm+tgl+branch \
+    -cm_name tc_base -cm_dir ./cov
+
+# 合并报告
+urg -dir ./cov/*.vdb -report ./cov_report -format both
+```
+
 ### 组合使用
 
 ```bash
@@ -285,9 +307,65 @@ vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
        $VERDI_HOME/share/PLI/VCS/LINUX64/pli.a \
     -initreg+cfg/initreg.cfg \
     -xprop=tmerge,cfg/xprop.cfg \
+    -cm line+cond+fsm+tgl+branch \
+    -cm_hier cfg/coverage.cfg \
     -f cfg/tb.f \
     -top harness
 ```
+
+## Agent 复位机制
+
+生成的 agent 内置复位处理，driver/monitor 能在任意时刻响应 `rst_n` 下降沿：
+
+- **Driver**：`fork...join_any` 监听复位，中断后调用 `reset_signals()` + `reset_callback()`，复位结束自动重启
+- **Monitor**：同样监听复位，中断后调用 `reset_callback()`
+- **Agent（advance 模式）**：复位时根据 `m_cfg.m_rst_flush_fifo` 清空内部 FIFO
+
+用户通过 override 虚方法实现自定义复位逻辑：
+
+```systemverilog
+// 在 driver 子类中 override
+task my_drv::reset_signals();
+    m_vif.drv_cb.valid <= 1'b0;
+    m_vif.drv_cb.data  <= '0;
+endtask
+
+task my_drv::reset_callback();
+    // 自定义复位动作
+endtask
+```
+
+cfg 配置项：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `m_rst_flush_fifo` | `1` | 复位时是否清空 FIFO（仅 advance 模式） |
+
+## 参考模板（SVA 断言 / 覆盖率）
+
+生成的 `env/` 目录下包含两个参考模板，**未加入 filelist**，用户按需引入：
+
+| 文件 | 内容 |
+|------|------|
+| `{block}_assert.sv` | SVA 断言完整示例：即时/并发断言、时序运算符、序列、FIFO/独热码/互斥/超时等场景、bind 用法、运行时开关 |
+| `{block}_cov.sv` | 覆盖率完整示例：covergroup、coverpoint（6种bin）、转换覆盖率、交叉覆盖率、UVM subscriber 模式、条件采样、VCS 命令 |
+
+使用时在 `env.f` 中添加：
+```
+../env/{block}_assert.sv
+../env/{block}_cov.sv
+```
+
+## cfg 配置文件说明
+
+| 文件 | 使用阶段 | 功能 |
+|------|----------|------|
+| `initreg.cfg` | 编译阶段 | 寄存器/存储器初始化策略（random/0/1），支持模块层次、信号匹配、排除规则 |
+| `xprop.cfg` | 编译阶段 | X 态传播检测（tmerge/xmerge/vmerge），支持模块/实例/信号级控制 |
+| `coverage.cfg` | 编译+运行 | 覆盖率收集范围（+tree/-tree 层次控制），翻转/行/条件/FSM/分支覆盖率 |
+| `wave.tcl` | 运行阶段 | Verdi FSDB 波形 dump，支持选择性dump、回溯dump、条件触发等 |
+
+所有配置文件均包含详细的中文注释和使用示例。
 
 ## common_uvm_scb 使用说明
 
@@ -345,5 +423,5 @@ pip install -e ".[dev]"
 # 运行测试
 python -m pytest tests/ -v
 
-# 当前测试覆盖：69 tests
+# 当前测试覆盖：70 tests
 ```
