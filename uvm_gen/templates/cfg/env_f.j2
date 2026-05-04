@@ -2,10 +2,10 @@
 {% for agent in agents %}
 -F  ../env/agents/{{ agent.name }}_agent/{{ agent.name }}_agent.f
 {% endfor %}
++incdir+../env
+../env/{{ block_name }}_sys_if.sv
 ../env/{{ block_name }}_vsqr.sv
 ../env/{{ block_name }}_rm.sv
 ../env/{{ block_name }}_checker.sv
 ../env/{{ block_name }}_env_cfg.sv
 ../env/{{ block_name }}_env.sv
-../th/harness.sv
--f ../tc/tc.f
