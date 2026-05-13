@@ -11,6 +11,13 @@ class {{ block_name }}_vsqr extends uvm_sequencer;
 {% for agent in agents %}
     {{ agent.name }}_sqr    m_{{ agent.name }}_sqr;
 {% endfor %}
+{% if aip_core %}
+
+    // static sqr handles for aip_cmd_seq macro registration
+{% for agent in agents %}
+    static {{ agent.name }}_sqr    s_{{ agent.name }}_sqr;
+{% endfor %}
+{% endif %}
 
     extern function new(string name, uvm_component parent=null);
 
