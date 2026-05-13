@@ -41,6 +41,7 @@ class BaseGenerator:
             block_name=self.cfg.block_name,
             date=time.strftime("%Y-%m-%d %X"),
             header=self.render_header,
+            aip_core=self.cfg.aip_core,
             **kwargs,
         )
 
