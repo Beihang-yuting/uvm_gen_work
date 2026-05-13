@@ -27,3 +27,11 @@ class CommonGenerator(BaseGenerator):
         for filename, template in self.TEMPLATES:
             content = self.render_template(template, file_name=filename)
             self.write_file(os.path.join(output_dir, filename), content)
+
+        # aip_core: generate activity subscriber
+        if self.cfg.aip_core:
+            content = self.render_template(
+                "common/aip_activity_subscriber.sv.j2",
+                file_name="aip_activity_subscriber.sv",
+            )
+            self.write_file(os.path.join(output_dir, "aip_activity_subscriber.sv"), content)

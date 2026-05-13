@@ -1,0 +1,23 @@
+{{ header(file_name) }}
+`ifndef  AIP_ACTIVITY_SUBSCRIBER__SV
+`define  AIP_ACTIVITY_SUBSCRIBER__SV
+
+// Generic activity subscriber — connect to any analysis port
+// write() auto-calls aip_activity::tick() for idle detection
+// Usage in env: agent.m_mon.m_ap.connect(subscriber.analysis_export);
+
+class aip_activity_subscriber #(type T = uvm_sequence_item) extends uvm_subscriber #(T);
+
+    `uvm_component_param_utils(aip_activity_subscriber #(T))
+
+    function new(string name, uvm_component parent);
+        super.new(name, parent);
+    endfunction
+
+    function void write(T t);
+        aip_activity::tick();
+    endfunction
+
+endclass
+
+`endif
