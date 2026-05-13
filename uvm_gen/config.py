@@ -25,6 +25,7 @@ class ProjectConfig:
     platform_type: PlatformType = PlatformType.ADVANCE
     agents: list[AgentConfig] = field(default_factory=list)
     output_dir: Optional[str] = None
+    aip_core: bool = False
 
     def __post_init__(self):
         if not self.author:
@@ -45,4 +46,5 @@ class ProjectConfig:
             platform_type=PlatformType(data.get("type", "advance")),
             agents=agents,
             output_dir=data.get("output_dir"),
+            aip_core=data.get("aip_core", False),
         )

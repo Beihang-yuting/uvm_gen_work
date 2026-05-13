@@ -60,3 +60,27 @@ agents:
 def test_project_config_from_yaml_missing_block():
     with pytest.raises(ValueError, match="missing required field 'block'"):
         ProjectConfig.from_yaml("agents:\n  - name: axi\n")
+
+
+def test_aip_core_default_false():
+    cfg = ProjectConfig(block_name="top")
+    assert cfg.aip_core == False
+
+
+def test_aip_core_from_yaml():
+    yaml_str = """
+block: top
+type: port
+aip_core: true
+agents:
+  - name: axi
+"""
+    cfg = ProjectConfig.from_yaml(yaml_str)
+    assert cfg.aip_core == True
+    assert cfg.platform_type == PlatformType.PORT
+
+
+def test_aip_core_yaml_default():
+    yaml_str = "block: top\nagents:\n  - name: spi\n"
+    cfg = ProjectConfig.from_yaml(yaml_str)
+    assert cfg.aip_core == False
