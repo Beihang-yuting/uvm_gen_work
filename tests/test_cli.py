@@ -100,3 +100,15 @@ def test_run_invalid_type():
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["-b", "top", "-a", "axi", "-t", "xxx"])
+
+
+def test_aip_core_flag():
+    parser = build_parser()
+    args = parser.parse_args(["-b", "top", "-a", "axi", "--aip-core"])
+    assert args.aip_core == True
+
+
+def test_aip_core_flag_default():
+    parser = build_parser()
+    args = parser.parse_args(["-b", "top", "-a", "axi"])
+    assert args.aip_core == False

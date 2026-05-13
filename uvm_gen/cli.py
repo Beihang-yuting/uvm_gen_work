@@ -92,6 +92,8 @@ def build_parser():
     )
     parser.add_argument("-f", "--config", dest="config_file", default=None, help="YAML config file")
     parser.add_argument("-o", "--output", default=".", help="Output directory")
+    parser.add_argument("--aip-core", action="store_true", default=False,
+                        help="Enable aip_core integration (TCL bridge, aip_log, aip_clk)")
     return parser
 
 
@@ -136,6 +138,7 @@ def run_from_args(args):
             platform_type=platform_type,
             agents=agents,
             output_dir=args.output,
+            aip_core=args.aip_core,
         )
         gen = PlatformGenerator(cfg)
         try:
@@ -154,6 +157,7 @@ def run_from_args(args):
             block_name=agent_cfg.name,
             platform_type=platform_type,
             agents=[agent_cfg],
+            aip_core=args.aip_core,
         )
         gen = AgentGenerator(cfg)
         gen.generate_agent(agent_cfg, args.output)
@@ -194,6 +198,8 @@ def _print_summary(cfg, agents):
     else:
         print("  %-16s %s" % (_dim("Agents:"), _dim("(none)")))
     print("  %-16s %s" % (_dim("Output:"), cfg.output_dir or "."))
+    if cfg.aip_core:
+        print("  %-16s %s" % (_dim("aip_core:"), _green("enabled")))
     print("")
 
 
