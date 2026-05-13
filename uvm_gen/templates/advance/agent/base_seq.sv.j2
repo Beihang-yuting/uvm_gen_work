@@ -57,5 +57,12 @@ class {{ name }}_base_seq extends uvm_sequence #({{ name }}_trans);
     endtask : send_response
 
 endclass
+{% if aip_core %}
+
+// --- aip_cmd_seq registration example ---
+// Uncomment and modify to register sequences for TCL control:
+// `aip_cmd_seq({{ name }}_write, {{ name }}_wr_seq, {{ block_name }}_vsqr::s_{{ name }}_sqr)
+// `aip_cmd_seq({{ name }}_read,  {{ name }}_rd_seq, {{ block_name }}_vsqr::s_{{ name }}_sqr)
+{% endif %}
 
 `endif
