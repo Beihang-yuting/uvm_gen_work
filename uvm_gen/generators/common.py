@@ -21,6 +21,8 @@ class CommonGenerator(BaseGenerator):
 
         # Generate filelist
         f_content = "+incdir+./\n./common_lib_pkg.sv\n"
+        if self.cfg.aip_core:
+            f_content += "./aip_activity_subscriber.sv\n"
         self.write_file(os.path.join(output_dir, "common_lib_pkg.f"), f_content)
 
         # Generate SV files
