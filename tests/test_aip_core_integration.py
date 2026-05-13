@@ -194,3 +194,58 @@ def test_harness_no_aip_clk_without(no_aip_cfg):
             content = f.read()
         assert "aip_clk_create" not in content
         assert "CLK_GEN" in content
+
+
+# --- Task 10: tc_tcl + tc_base + TCL demo ---
+
+def test_tc_tcl_generated(aip_port_cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        aip_port_cfg.output_dir = tmpdir
+        project_dir = PlatformGenerator(aip_port_cfg).generate()
+        tc_tcl = os.path.join(project_dir, "tc", "tc_tcl.sv")
+        assert os.path.exists(tc_tcl)
+        with open(tc_tcl) as f:
+            content = f.read()
+        assert "aip_tcl_bridge::run_loop()" in content
+        assert "tc_tcl" in content
+
+        tc_base = os.path.join(project_dir, "tc", "tc_base.sv")
+        assert os.path.exists(tc_base)
+
+        tc_f = os.path.join(project_dir, "tc", "tc.f")
+        with open(tc_f) as f:
+            content = f.read()
+        assert "tc_tcl.sv" in content
+        assert "tc_base.sv" in content
+
+
+def test_tcl_demo_generated(aip_port_cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        aip_port_cfg.output_dir = tmpdir
+        project_dir = PlatformGenerator(aip_port_cfg).generate()
+        demo = os.path.join(project_dir, "tc", "tcl", "tc_tcl_demo.tcl")
+        assert os.path.exists(demo)
+        with open(demo) as f:
+            content = f.read()
+        assert "AIP_CORE_HOME" in content
+        assert "end_test" in content
+
+
+def test_no_tc_tcl_without_aip(no_aip_cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        no_aip_cfg.output_dir = tmpdir
+        project_dir = PlatformGenerator(no_aip_cfg).generate()
+        assert not os.path.exists(os.path.join(project_dir, "tc", "tc_tcl.sv"))
+        assert not os.path.exists(os.path.join(project_dir, "tc", "tcl"))
+
+
+# --- Task 11: tb.f — AIP_CORE_HOME ---
+
+def test_tb_f_aip_core_home(aip_port_cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        aip_port_cfg.output_dir = tmpdir
+        project_dir = PlatformGenerator(aip_port_cfg).generate()
+        with open(os.path.join(project_dir, "cfg", "tb.f")) as f:
+            content = f.read()
+        assert "AIP_CORE_HOME" in content
+        assert "aip_core_pkg.sv" in content

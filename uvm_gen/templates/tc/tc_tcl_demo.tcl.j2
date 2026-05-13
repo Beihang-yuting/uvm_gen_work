@@ -1,0 +1,30 @@
+# ============================================
+# {{ block_name }} TCL Test Demo
+# Usage: ./simv -ucli -do tc/tcl/tc_tcl_demo.tcl +UVM_TESTNAME=tc_tcl
+# ============================================
+source $env(AIP_CORE_HOME)/aip_cmd.tcl
+
+puts "=========================================="
+puts " {{ block_name }} TCL Test"
+puts "=========================================="
+
+# --- Example: set parameters and run sequences ---
+# Uncomment and modify for your protocol:
+#
+{% for agent in agents %}
+# set_param {
+#     {{ agent.name }}.wr.addr  [0:0xFF]
+#     {{ agent.name }}.wr.data  [0:0xFFFFFFFF]
+# }
+# {{ agent.name }}_write count=10
+#
+{% endfor %}
+# --- Parallel execution ---
+# fork
+{% for agent in agents %}
+#     {{ agent.name }}_write count=5
+{% endfor %}
+# join
+
+# --- Exit ---
+end_test idle=1us timeout=10us

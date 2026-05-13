@@ -31,7 +31,7 @@ def test_adv_platform_full_structure(adv_cfg):
         assert os.path.exists(os.path.join(project_dir, "env", "top_sys_if.sv"))
         assert os.path.exists(os.path.join(project_dir, "common", "common_lib_pkg.sv"))
         assert os.path.exists(os.path.join(project_dir, "th", "harness.sv"))
-        assert os.path.exists(os.path.join(project_dir, "tc", "base_test.sv"))
+        assert os.path.exists(os.path.join(project_dir, "tc", "tc_base.sv"))
         assert os.path.exists(os.path.join(project_dir, "cfg", "tb.f"))
         assert os.path.exists(os.path.join(project_dir, "cfg", "initreg.cfg"))
         assert os.path.exists(os.path.join(project_dir, "cfg", "xprop.cfg"))

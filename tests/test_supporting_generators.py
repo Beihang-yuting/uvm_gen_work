@@ -35,9 +35,9 @@ def test_testcase_generates(cfg):
     with tempfile.TemporaryDirectory() as tmpdir:
         gen = TestcaseGenerator(cfg)
         gen.generate(tmpdir)
-        assert os.path.exists(os.path.join(tmpdir, "base_test.sv"))
+        assert os.path.exists(os.path.join(tmpdir, "tc_base.sv"))
         assert os.path.exists(os.path.join(tmpdir, "tc.f"))
-        with open(os.path.join(tmpdir, "base_test.sv")) as f:
+        with open(os.path.join(tmpdir, "tc_base.sv")) as f:
             content = f.read()
         assert "top_env" in content
 
@@ -48,4 +48,4 @@ def test_testcase_tc_f_includes(cfg):
         gen.generate(tmpdir)
         with open(os.path.join(tmpdir, "tc.f")) as f:
             content = f.read()
-        assert "base_test.sv" in content
+        assert "tc_base.sv" in content
