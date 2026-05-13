@@ -18,6 +18,18 @@ class {{ name }}_trans extends uvm_sequence_item;
         return 1;
     endfunction
 
+{% if aip_core %}
+
+    // --- aip_cmdline parameter loading ---
+    // Usage: in seq body, call tr.set_path("seq_name") to load fields from TCL set_param
+    // Example:
+    //   `aip_int(path, bit[31:0], addr, 0)
+    //   `aip_int(path, bit[31:0], data, 0)
+    function void set_path(string path);
+        // TODO: add `aip_int / `aip_string calls for your protocol fields
+    endfunction
+{% endif %}
+
 endclass
 
 constraint {{ name }}_trans::trans_cons{
