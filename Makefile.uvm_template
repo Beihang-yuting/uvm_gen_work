@@ -1,11 +1,16 @@
-# UVM Testbench Makefile (VCS) — temporary, not for gen_tb output
-# Drop this Makefile at the root of a generated testbench, e.g.:
-#   <block>/Makefile
-# Adjust BLOCK, TEST, etc. via command line:
-#   make cmp
-#   make run TEST=tc_base SEED=1
-#   make verdi
-#   make clean
+# UVM Testbench Makefile (VCS) — temporary, not part of gen_tb output
+# Drop at the root of a generated testbench:  cp <this> <block>/Makefile
+#
+# All artifacts go under $(SIM_DIR) (default: sim).  Override with:
+#   make cmp SIM_DIR=sim_$(date +%Y%m%d)
+#   make run TEST=tc_base SEED=1 SIM_DIR=mysim
+#
+# Layout under $(SIM_DIR):
+#   build/   simv, simv.daidir, csrc, .kdb     (VCS compile intermediates)
+#   logs/    compile.log, run_<TEST>_<SEED>.log
+#   waves/   <TEST>_<SEED>.fsdb (or .vpd)
+#   cov/     simv.vdb/, cov_report, cov_merged
+#   runs/    <TEST>_<SEED>/                    (per-run cwd: UVM dumps, ucli.key)
 
 # ---------------- User-tunable ----------------
 BLOCK     ?= top
@@ -16,6 +21,21 @@ TIMESCALE ?= 1ns/1ps
 WAVE      ?= fsdb                  # fsdb | vpd | none
 COV       ?= 0                     # 1 = enable coverage
 XPROP     ?= 0                     # 1 = enable xprop
+SIM_DIR   ?= sim                   # top-level output dir (override freely)
+
+# ---------------- Derived paths ----------------
+BUILD_DIR := $(SIM_DIR)/build
+LOG_DIR   := $(SIM_DIR)/logs
+WAVE_DIR  := $(SIM_DIR)/waves
+COV_DIR   := $(SIM_DIR)/cov
+RUNS_DIR  := $(SIM_DIR)/runs
+
+SIMV      := $(BUILD_DIR)/simv
+RUN_NAME  := $(TEST)_$(SEED)
+RUN_PATH  := $(RUNS_DIR)/$(RUN_NAME)
+RUN_LOG   := $(LOG_DIR)/run_$(RUN_NAME).log
+CMP_LOG   := $(LOG_DIR)/compile.log
+COV_VDB   := $(COV_DIR)/simv.vdb
 
 # Filelists produced by gen_tb under cfg/
 DUT_F     := cfg/dut.f
@@ -24,11 +44,6 @@ TB_F      := cfg/tb.f
 COV_CFG   := cfg/coverage.cfg
 XPROP_CFG := cfg/xprop.cfg
 WAVE_TCL  := cfg/wave.tcl
-INITREG   := cfg/initreg.cfg
-
-SIMV      := ./simv
-LOG_DIR   := logs
-RUN_DIR   := run_$(TEST)_$(SEED)
 
 # ---------------- VCS flags ----------------
 VCS_OPTS := -full64 -sverilog \
@@ -40,10 +55,12 @@ VCS_OPTS := -full64 -sverilog \
             +define+UVM_NO_DEPRECATED \
             +incdir+./common +incdir+./env +incdir+./tc +incdir+./th \
             -f $(DUT_F) -f $(ENV_F) -f $(TB_F) \
-            -l compile.log
+            -Mdir=$(BUILD_DIR)/csrc \
+            -o $(SIMV) \
+            -l $(CMP_LOG)
 
 ifeq ($(COV),1)
-VCS_OPTS += -cm line+cond+fsm+branch+tgl -cm_dir simv.vdb -cm_hier $(COV_CFG)
+VCS_OPTS += -cm line+cond+fsm+branch+tgl -cm_dir $(COV_VDB) -cm_hier $(COV_CFG)
 endif
 
 ifeq ($(XPROP),1)
@@ -54,70 +71,98 @@ endif
 SIMV_OPTS := +UVM_TESTNAME=$(TEST) \
              +UVM_VERBOSITY=$(UVM_VER) \
              +ntb_random_seed=$(SEED) \
-             -l $(RUN_DIR)/run.log
+             -l $(RUN_LOG)
 
 ifeq ($(WAVE),fsdb)
-SIMV_OPTS += -ucli -do $(WAVE_TCL)
+SIMV_OPTS += -ucli -do ../../../$(WAVE_TCL)
+WAVE_OUT  := $(WAVE_DIR)/$(RUN_NAME).fsdb
 endif
 ifeq ($(WAVE),vpd)
-SIMV_OPTS += +vpdfile+$(RUN_DIR)/wave.vpd
+SIMV_OPTS += +vpdfile+wave.vpd
+WAVE_OUT  := $(WAVE_DIR)/$(RUN_NAME).vpd
 endif
 
 ifeq ($(COV),1)
-SIMV_OPTS += -cm line+cond+fsm+branch+tgl -cm_dir simv.vdb -cm_name $(TEST)_$(SEED)
+SIMV_OPTS += -cm line+cond+fsm+branch+tgl -cm_dir $(COV_VDB) -cm_name $(RUN_NAME)
 endif
 
 # ---------------- Targets ----------------
-.PHONY: help cmp run rerun verdi cov merge clean dist-clean
+.PHONY: help dirs cmp run rerun verdi cov merge clean dist-clean show
 
 help:
 	@echo ""
 	@echo "Targets:"
-	@echo "  make cmp                            Compile (VCS)"
-	@echo "  make run TEST=<tc> [SEED=N]         Run a single test"
-	@echo "  make rerun TEST=<tc> [SEED=N]       cmp + run"
+	@echo "  make cmp                            Compile (VCS) into $(BUILD_DIR)/"
+	@echo "  make run TEST=<tc> [SEED=N]         Run single test"
+	@echo "  make rerun TEST=<tc> [SEED=N]       clean + cmp + run"
 	@echo "  make verdi [TEST=<tc> SEED=N]       Open waveform in Verdi"
-	@echo "  make cov                            Run coverage report"
+	@echo "  make cov                            Run coverage report into $(COV_DIR)/cov_report"
 	@echo "  make merge                          Merge multi-run coverage"
-	@echo "  make clean                          Remove run artifacts"
-	@echo "  make dist-clean                     Remove everything (simv, vdb, logs)"
+	@echo "  make show                           Show current SIM_DIR layout"
+	@echo "  make clean                          Remove run artifacts (keep simv)"
+	@echo "  make dist-clean                     Remove entire $(SIM_DIR)/"
 	@echo ""
 	@echo "Variables (override on cmdline):"
+	@echo "  SIM_DIR=$(SIM_DIR)   (output root, change to keep multiple sim runs side-by-side)"
 	@echo "  BLOCK=$(BLOCK)  TEST=$(TEST)  SEED=$(SEED)  UVM_VER=$(UVM_VER)"
 	@echo "  WAVE=$(WAVE) (fsdb|vpd|none)  COV=$(COV)  XPROP=$(XPROP)"
 	@echo ""
+	@echo "Example:"
+	@echo "  make rerun TEST=tc_smoke SEED=42 SIM_DIR=sim_smoke WAVE=fsdb COV=1"
+	@echo ""
 
-cmp: $(SIMV)
+dirs:
+	@mkdir -p $(BUILD_DIR) $(LOG_DIR) $(WAVE_DIR) $(COV_DIR) $(RUNS_DIR)
 
-$(SIMV):
-	@mkdir -p $(LOG_DIR)
+cmp: dirs $(SIMV)
+
+$(SIMV): dirs
 	vcs $(VCS_OPTS)
 
 run: cmp
-	@mkdir -p $(RUN_DIR)
-	cd $(RUN_DIR) && ../$(SIMV) $(SIMV_OPTS)
+	@mkdir -p $(RUN_PATH)
+	cd $(RUN_PATH) && $(abspath $(SIMV)) $(SIMV_OPTS)
+ifeq ($(WAVE),fsdb)
+	@if [ -f $(RUN_PATH)/wave.fsdb ]; then \
+	  mv -f $(RUN_PATH)/wave.fsdb $(WAVE_OUT); \
+	  echo "Wave: $(WAVE_OUT)"; \
+	fi
+endif
+ifeq ($(WAVE),vpd)
+	@if [ -f $(RUN_PATH)/wave.vpd ]; then \
+	  mv -f $(RUN_PATH)/wave.vpd $(WAVE_OUT); \
+	  echo "Wave: $(WAVE_OUT)"; \
+	fi
+endif
+	@echo "Run log: $(RUN_LOG)"
 
 rerun: clean cmp run
 
 verdi:
-	@if [ "$(WAVE)" = "fsdb" ]; then \
-	  verdi -ssf $(RUN_DIR)/wave.fsdb -nologo & \
-	elif [ "$(WAVE)" = "vpd" ]; then \
-	  verdi -ssv $(RUN_DIR)/wave.vpd -nologo & \
+	@if [ "$(WAVE)" = "fsdb" ] && [ -f $(WAVE_DIR)/$(RUN_NAME).fsdb ]; then \
+	  verdi -ssf $(WAVE_DIR)/$(RUN_NAME).fsdb -nologo & \
+	elif [ "$(WAVE)" = "vpd" ] && [ -f $(WAVE_DIR)/$(RUN_NAME).vpd ]; then \
+	  verdi -ssv $(WAVE_DIR)/$(RUN_NAME).vpd -nologo & \
 	else \
-	  echo "WAVE=$(WAVE) — no waveform file. Re-run with WAVE=fsdb or WAVE=vpd."; \
+	  echo "No wave file at $(WAVE_DIR)/$(RUN_NAME).{fsdb,vpd}. Re-run with WAVE=fsdb or WAVE=vpd."; \
 	  exit 1; \
 	fi
 
 cov:
-	urg -full64 -dir simv.vdb -format both -report cov_report
+	urg -full64 -dir $(COV_VDB) -format both -report $(COV_DIR)/cov_report
 
 merge:
-	urg -full64 -dir simv.vdb/* -dbname simv.vdb/merged -format both -report cov_merged
+	urg -full64 -dir $(COV_DIR)/simv.vdb* -dbname $(COV_DIR)/merged -format both \
+	    -report $(COV_DIR)/cov_merged
+
+show:
+	@echo "SIM_DIR layout ($(SIM_DIR)):"
+	@if [ -d $(SIM_DIR) ]; then find $(SIM_DIR) -maxdepth 2 -print | sort; \
+	else echo "  (does not exist yet)"; fi
 
 clean:
-	rm -rf $(RUN_DIR) compile.log ucli.key novas.* verdiLog DVEfiles
+	rm -rf $(RUNS_DIR) $(LOG_DIR) $(WAVE_DIR) ucli.key novas.* verdiLog DVEfiles
 
-dist-clean: clean
-	rm -rf simv simv.daidir csrc simv.vdb cov_report cov_merged $(LOG_DIR) \
-	       *.fsdb *.vpd .vlogansetup.env .vcs_lib_lock vc_hdrs.h
+dist-clean:
+	rm -rf $(SIM_DIR) ucli.key novas.* verdiLog DVEfiles \
+	       .vlogansetup.env .vcs_lib_lock vc_hdrs.h
