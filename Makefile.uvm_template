@@ -1,0 +1,123 @@
+# UVM Testbench Makefile (VCS) — temporary, not for gen_tb output
+# Drop this Makefile at the root of a generated testbench, e.g.:
+#   <block>/Makefile
+# Adjust BLOCK, TEST, etc. via command line:
+#   make cmp
+#   make run TEST=tc_base SEED=1
+#   make verdi
+#   make clean
+
+# ---------------- User-tunable ----------------
+BLOCK     ?= top
+TEST      ?= tc_base
+SEED      ?= 1
+UVM_VER   ?= UVM_MEDIUM
+TIMESCALE ?= 1ns/1ps
+WAVE      ?= fsdb                  # fsdb | vpd | none
+COV       ?= 0                     # 1 = enable coverage
+XPROP     ?= 0                     # 1 = enable xprop
+
+# Filelists produced by gen_tb under cfg/
+DUT_F     := cfg/dut.f
+ENV_F     := cfg/env.f
+TB_F      := cfg/tb.f
+COV_CFG   := cfg/coverage.cfg
+XPROP_CFG := cfg/xprop.cfg
+WAVE_TCL  := cfg/wave.tcl
+INITREG   := cfg/initreg.cfg
+
+SIMV      := ./simv
+LOG_DIR   := logs
+RUN_DIR   := run_$(TEST)_$(SEED)
+
+# ---------------- VCS flags ----------------
+VCS_OPTS := -full64 -sverilog \
+            -ntb_opts uvm-1.2 \
+            -timescale=$(TIMESCALE) \
+            -debug_access+all \
+            -kdb \
+            -lca \
+            +define+UVM_NO_DEPRECATED \
+            +incdir+./common +incdir+./env +incdir+./tc +incdir+./th \
+            -f $(DUT_F) -f $(ENV_F) -f $(TB_F) \
+            -l compile.log
+
+ifeq ($(COV),1)
+VCS_OPTS += -cm line+cond+fsm+branch+tgl -cm_dir simv.vdb -cm_hier $(COV_CFG)
+endif
+
+ifeq ($(XPROP),1)
+VCS_OPTS += -xprop=$(XPROP_CFG)
+endif
+
+# ---------------- Simulation flags ----------------
+SIMV_OPTS := +UVM_TESTNAME=$(TEST) \
+             +UVM_VERBOSITY=$(UVM_VER) \
+             +ntb_random_seed=$(SEED) \
+             -l $(RUN_DIR)/run.log
+
+ifeq ($(WAVE),fsdb)
+SIMV_OPTS += -ucli -do $(WAVE_TCL)
+endif
+ifeq ($(WAVE),vpd)
+SIMV_OPTS += +vpdfile+$(RUN_DIR)/wave.vpd
+endif
+
+ifeq ($(COV),1)
+SIMV_OPTS += -cm line+cond+fsm+branch+tgl -cm_dir simv.vdb -cm_name $(TEST)_$(SEED)
+endif
+
+# ---------------- Targets ----------------
+.PHONY: help cmp run rerun verdi cov merge clean dist-clean
+
+help:
+	@echo ""
+	@echo "Targets:"
+	@echo "  make cmp                            Compile (VCS)"
+	@echo "  make run TEST=<tc> [SEED=N]         Run a single test"
+	@echo "  make rerun TEST=<tc> [SEED=N]       cmp + run"
+	@echo "  make verdi [TEST=<tc> SEED=N]       Open waveform in Verdi"
+	@echo "  make cov                            Run coverage report"
+	@echo "  make merge                          Merge multi-run coverage"
+	@echo "  make clean                          Remove run artifacts"
+	@echo "  make dist-clean                     Remove everything (simv, vdb, logs)"
+	@echo ""
+	@echo "Variables (override on cmdline):"
+	@echo "  BLOCK=$(BLOCK)  TEST=$(TEST)  SEED=$(SEED)  UVM_VER=$(UVM_VER)"
+	@echo "  WAVE=$(WAVE) (fsdb|vpd|none)  COV=$(COV)  XPROP=$(XPROP)"
+	@echo ""
+
+cmp: $(SIMV)
+
+$(SIMV):
+	@mkdir -p $(LOG_DIR)
+	vcs $(VCS_OPTS)
+
+run: cmp
+	@mkdir -p $(RUN_DIR)
+	cd $(RUN_DIR) && ../$(SIMV) $(SIMV_OPTS)
+
+rerun: clean cmp run
+
+verdi:
+	@if [ "$(WAVE)" = "fsdb" ]; then \
+	  verdi -ssf $(RUN_DIR)/wave.fsdb -nologo & \
+	elif [ "$(WAVE)" = "vpd" ]; then \
+	  verdi -ssv $(RUN_DIR)/wave.vpd -nologo & \
+	else \
+	  echo "WAVE=$(WAVE) — no waveform file. Re-run with WAVE=fsdb or WAVE=vpd."; \
+	  exit 1; \
+	fi
+
+cov:
+	urg -full64 -dir simv.vdb -format both -report cov_report
+
+merge:
+	urg -full64 -dir simv.vdb/* -dbname simv.vdb/merged -format both -report cov_merged
+
+clean:
+	rm -rf $(RUN_DIR) compile.log ucli.key novas.* verdiLog DVEfiles
+
+dist-clean: clean
+	rm -rf simv simv.daidir csrc simv.vdb cov_report cov_merged $(LOG_DIR) \
+	       *.fsdb *.vpd .vlogansetup.env .vcs_lib_lock vc_hdrs.h
