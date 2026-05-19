@@ -11,12 +11,12 @@ class {{ block_name }}_rm extends uvm_component;
 
     // dec in_port — standard: get data from FIFO via uvm_blocking_get_port
 {% for agent in agents %}
-    uvm_blocking_get_port#(uvm_sequence_item)   m_from_{{ agent.name }}_agt_mon_port;
+    uvm_blocking_get_port#({{ agent.name }}_trans)   m_from_{{ agent.name }}_agt_mon_port;
 {% endfor %}
 
     // dec out_port — send processed transactions to checker via analysis_port
 {% for agent in agents %}
-    uvm_analysis_port#(uvm_sequence_item)       m_rm_{{ agent.name }}_trans_to_scb_port;
+    uvm_analysis_port#({{ agent.name }}_trans)       m_rm_{{ agent.name }}_trans_to_scb_port;
 {% endfor %}
 
     extern function new(string name, uvm_component parent);
@@ -49,14 +49,10 @@ endtask
 
 {% for agent in agents %}
 task {{ block_name }}_rm::process_trans_from_{{ agent.name }}_agt();
-    uvm_sequence_item   get_tr;
     {{ agent.name }}_trans    tr;
     `uvm_info(get_full_name(), "process_trans_from_{{ agent.name }}_agt start", UVM_NONE);
     while(1) begin
-        this.m_from_{{ agent.name }}_agt_mon_port.get(get_tr);
-        if(!$cast(tr, get_tr)) begin
-            `uvm_fatal(get_full_name(), $sformatf("trans type should be {{ agent.name }}_trans"));
-        end
+        this.m_from_{{ agent.name }}_agt_mon_port.get(tr);
         // TODO: implement reference model logic for {{ agent.name }}
         m_rm_{{ agent.name }}_trans_to_scb_port.write(tr);
     end

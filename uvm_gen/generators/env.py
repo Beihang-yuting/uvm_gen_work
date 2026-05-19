@@ -1,7 +1,6 @@
-from __future__ import annotations
 import os
-from uvm_gen.config import ProjectConfig
-from uvm_gen.generators.base import BaseGenerator
+from ..config import ProjectConfig
+from .base import BaseGenerator
 
 
 class EnvGenerator(BaseGenerator):

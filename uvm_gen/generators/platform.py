@@ -1,12 +1,11 @@
-from __future__ import annotations
 import os
-from uvm_gen.config import ProjectConfig
-from uvm_gen.generators.agent import AgentGenerator
-from uvm_gen.generators.common import CommonGenerator
-from uvm_gen.generators.env import EnvGenerator
-from uvm_gen.generators.harness import HarnessGenerator
-from uvm_gen.generators.testcase import TestcaseGenerator
-from uvm_gen.generators.base import BaseGenerator
+from ..config import ProjectConfig
+from .agent import AgentGenerator
+from .common import CommonGenerator
+from .env import EnvGenerator
+from .harness import HarnessGenerator
+from .testcase import TestcaseGenerator
+from .base import BaseGenerator
 
 
 class PlatformGenerator(BaseGenerator):

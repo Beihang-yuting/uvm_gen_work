@@ -5,9 +5,16 @@
 
 module    harness;
 
+{% if aip_core %}
+// aip_core clock generation (100MHz demo)
+`aip_clk_create(clk0, 100e6)
+wire clk = clk0_if.clk;
+reg rst_n;
+{% else %}
 //reg clk;
 reg rst_n;
 `CLK_GEN(clk,5,1);
+{% endif %}
 
 //init dut here
 //xxx_module_top UDT(

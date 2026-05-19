@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""UVM Testbench Generator setup.
+
+Install or uninstall the 'gen_tb' shortcut and verify Python deps.
+
+Usage:
+  ./setup install     Check Python/deps, then symlink ~/.local/bin/gen_tb
+  ./setup uninstall   Remove the ~/.local/bin/gen_tb symlink
+  ./setup check       Only check Python version and dependencies
+  ./setup help        Show this help
+
+Notes:
+  - Never installs Python packages automatically; only prints the pip command.
+  - Requires Python 3.6+.
+  - The shortcut is created in ~/.local/bin (must be on PATH).
+"""
+import os
+import sys
+
+MIN_PY = (3, 6)
+
+_HERE = os.path.dirname(os.path.realpath(__file__))      # repo root
+_GEN_TB = os.path.join(_HERE, "uvm_gen", "gen_tb")
+_BIN_DIR = os.path.join(os.path.expanduser("~"), ".local", "bin")
+_BIN_LINK = os.path.join(_BIN_DIR, "gen_tb")
+
+
+def _check_python():
+    if sys.version_info < MIN_PY:
+        sys.stderr.write(
+            "Error: Python %d.%d+ required (current: %d.%d).\n"
+            % (MIN_PY[0], MIN_PY[1], sys.version_info[0], sys.version_info[1])
+        )
+        return 1
+    print("[OK] Python %d.%d.%d" % sys.version_info[:3])
+    return 0
+
+
+def _check_deps():
+    missing = []
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        missing.append(("PyYAML", "pyyaml"))
+    try:
+        import jinja2  # noqa: F401
+    except ImportError:
+        missing.append(("Jinja2", "jinja2"))
+    if sys.version_info < (3, 7):
+        try:
+            import dataclasses  # noqa: F401
+        except ImportError:
+            missing.append(("dataclasses (3.6 backport)", "dataclasses"))
+    if not missing:
+        print("[OK] All Python dependencies present")
+        return 0
+    print("[MISSING] Required Python package(s):")
+    for name, _ in missing:
+        print("  - %s" % name)
+    pkgs = " ".join(p for _, p in missing)
+    print("")
+    print("Install manually with one of:")
+    print("  pip install %s" % pkgs)
+    print("  pip install --user %s" % pkgs)
+    print("  pip install --break-system-packages %s   # if PEP 668 blocks" % pkgs)
+    return 1
+
+
+def _verify_gen_tb():
+    if not os.path.isfile(_GEN_TB):
+        sys.stderr.write(
+            "Error: gen_tb not found at %s\n"
+            "Re-clone the repository or verify project layout.\n" % _GEN_TB
+        )
+        return 1
+    if not os.access(_GEN_TB, os.X_OK):
+        try:
+            os.chmod(_GEN_TB, 0o755)
+        except OSError as e:
+            sys.stderr.write("Error: cannot make %s executable: %s\n" % (_GEN_TB, e))
+            return 1
+    return 0
+
+
+def _install_link():
+    try:
+        os.makedirs(_BIN_DIR)
+    except OSError:
+        if not os.path.isdir(_BIN_DIR):
+            sys.stderr.write("Error: cannot create %s\n" % _BIN_DIR)
+            return 1
+    if os.path.islink(_BIN_LINK):
+        target = os.path.realpath(_BIN_LINK)
+        if target == _GEN_TB:
+            print("[OK] Shortcut already installed: %s" % _BIN_LINK)
+            _hint_path()
+            return 0
+        sys.stderr.write(
+            "Error: %s already exists (points to %s).\n"
+            "Remove it first: rm %s\n" % (_BIN_LINK, target, _BIN_LINK)
+        )
+        return 1
+    if os.path.exists(_BIN_LINK):
+        sys.stderr.write(
+            "Error: %s exists but is not a symlink. Remove manually.\n" % _BIN_LINK
+        )
+        return 1
+    os.symlink(_GEN_TB, _BIN_LINK)
+    print("[OK] Installed: %s -> %s" % (_BIN_LINK, _GEN_TB))
+    _hint_path()
+    return 0
+
+
+def _hint_path():
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    if _BIN_DIR in path_dirs:
+        print("     Run 'gen_tb -h' from any directory.")
+        return
+    print("")
+    print("Note: %s is not on PATH. Add to your shell rc:" % _BIN_DIR)
+    print('  export PATH="%s:$PATH"' % _BIN_DIR)
+
+
+def _uninstall_link():
+    if os.path.islink(_BIN_LINK):
+        target = os.path.realpath(_BIN_LINK)
+        os.unlink(_BIN_LINK)
+        print("[OK] Uninstalled: %s (was -> %s)" % (_BIN_LINK, target))
+        return 0
+    if os.path.exists(_BIN_LINK):
+        sys.stderr.write(
+            "Error: %s exists but is not a symlink. Remove manually.\n" % _BIN_LINK
+        )
+        return 1
+    print("[OK] Not installed: %s" % _BIN_LINK)
+    return 0
+
+
+def _print_help():
+    print(__doc__)
+
+
+def main():
+    args = sys.argv[1:]
+    cmd = args[0] if args else "help"
+
+    if cmd in ("-h", "--help", "help"):
+        _print_help()
+        return 0
+
+    if cmd == "check":
+        rc1 = _check_python()
+        rc2 = _check_deps()
+        return rc1 or rc2
+
+    if cmd == "install":
+        if _check_python():
+            return 1
+        if _check_deps():
+            print("")
+            sys.stderr.write(
+                "Install the missing packages first, then re-run: ./setup install\n"
+            )
+            return 1
+        if _verify_gen_tb():
+            return 1
+        return _install_link()
+
+    if cmd == "uninstall":
+        return _uninstall_link()
+
+    sys.stderr.write("Unknown command: %s\n\n" % cmd)
+    _print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

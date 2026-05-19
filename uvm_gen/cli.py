@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import os
 import re
@@ -7,9 +5,9 @@ import sys
 
 import yaml
 
-from uvm_gen.config import AgentConfig, PlatformType, ProjectConfig
-from uvm_gen.generators.agent import AgentGenerator
-from uvm_gen.generators.platform import PlatformGenerator
+from .config import AgentConfig, PlatformType, ProjectConfig
+from .generators.agent import AgentGenerator
+from .generators.platform import PlatformGenerator
 
 USAGE = """\
 UVM Testbench Generator
@@ -27,6 +25,10 @@ Options:
   -f, --config  YAML configuration file
   -o, --output  Output directory (default: current directory)
   -h, --help    Show this help message
+
+Install/uninstall the gen_tb shortcut via the setup script at the repo root:
+  ./setup install     Create ~/.local/bin/gen_tb symlink
+  ./setup uninstall   Remove the symlink
 
 Examples:
   gen_tb -b top -a "axi,apb"              # Full platform with agents
@@ -92,6 +94,8 @@ def build_parser():
     )
     parser.add_argument("-f", "--config", dest="config_file", default=None, help="YAML config file")
     parser.add_argument("-o", "--output", default=".", help="Output directory")
+    parser.add_argument("--aip-core", action="store_true", default=False,
+                        help="Enable aip_core integration (TCL bridge, aip_log, aip_clk)")
     return parser
 
 
@@ -136,6 +140,7 @@ def run_from_args(args):
             platform_type=platform_type,
             agents=agents,
             output_dir=args.output,
+            aip_core=args.aip_core,
         )
         gen = PlatformGenerator(cfg)
         try:
@@ -154,6 +159,7 @@ def run_from_args(args):
             block_name=agent_cfg.name,
             platform_type=platform_type,
             agents=[agent_cfg],
+            aip_core=args.aip_core,
         )
         gen = AgentGenerator(cfg)
         gen.generate_agent(agent_cfg, args.output)
@@ -194,6 +200,8 @@ def _print_summary(cfg, agents):
     else:
         print("  %-16s %s" % (_dim("Agents:"), _dim("(none)")))
     print("  %-16s %s" % (_dim("Output:"), cfg.output_dir or "."))
+    if cfg.aip_core:
+        print("  %-16s %s" % (_dim("aip_core:"), _green("enabled")))
     print("")
 
 

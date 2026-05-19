@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import os
 
-from uvm_gen.config import AgentConfig, ProjectConfig
-from uvm_gen.generators.base import BaseGenerator
+from ..config import AgentConfig, ProjectConfig
+from .base import BaseGenerator
 
 
 class AgentGenerator(BaseGenerator):

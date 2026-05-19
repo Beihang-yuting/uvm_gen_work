@@ -1,12 +1,10 @@
-from __future__ import annotations
-
 import os
 import time
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
-from uvm_gen.config import ProjectConfig, PlatformType
+from ..config import ProjectConfig, PlatformType
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
@@ -41,6 +39,7 @@ class BaseGenerator:
             block_name=self.cfg.block_name,
             date=time.strftime("%Y-%m-%d %X"),
             header=self.render_header,
+            aip_core=self.cfg.aip_core,
             **kwargs,
         )
 

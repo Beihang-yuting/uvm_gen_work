@@ -1,0 +1,30 @@
+{{ header(file_name) }}
+`ifndef  TC_TCL__SV
+`define  TC_TCL__SV
+
+
+class tc_tcl extends tc_base;
+
+    `uvm_component_utils(tc_tcl)
+
+    function new(string name="tc_tcl", uvm_component parent=null);
+        super.new(name, parent);
+    endfunction
+
+    virtual task main_phase(uvm_phase phase);
+        phase.raise_objection(this);
+
+        // Wait for reset release
+        wait(harness.rst_n === 1'b1);
+        repeat(2) @(posedge harness.clk);
+        `aip_info(("Entering TCL bridge mode"));
+
+        // TCL takes control — all seq calls via TCL scripts
+        aip_tcl_bridge::run_loop();
+
+        phase.drop_objection(this);
+    endtask
+
+endclass
+
+`endif

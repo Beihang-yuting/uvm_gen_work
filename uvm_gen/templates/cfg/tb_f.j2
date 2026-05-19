@@ -1,3 +1,7 @@
+{% if aip_core %}
++incdir+$AIP_CORE_HOME
+$AIP_CORE_HOME/aip_core_pkg.sv
+{% endif %}
 -F   ./dut.f
 -F   ./env.f
 -F   ../tc/tc.f

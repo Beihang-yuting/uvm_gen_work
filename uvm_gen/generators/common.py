@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import os
 
-from uvm_gen.config import ProjectConfig
-from uvm_gen.generators.base import BaseGenerator
+from ..config import ProjectConfig
+from .base import BaseGenerator
 
 
 class CommonGenerator(BaseGenerator):
@@ -21,9 +19,19 @@ class CommonGenerator(BaseGenerator):
 
         # Generate filelist
         f_content = "+incdir+./\n./common_lib_pkg.sv\n"
+        if self.cfg.aip_core:
+            f_content += "./aip_activity_subscriber.sv\n"
         self.write_file(os.path.join(output_dir, "common_lib_pkg.f"), f_content)
 
         # Generate SV files
         for filename, template in self.TEMPLATES:
             content = self.render_template(template, file_name=filename)
             self.write_file(os.path.join(output_dir, filename), content)
+
+        # aip_core: generate activity subscriber
+        if self.cfg.aip_core:
+            content = self.render_template(
+                "common/aip_activity_subscriber.sv.j2",
+                file_name="aip_activity_subscriber.sv",
+            )
+            self.write_file(os.path.join(output_dir, "aip_activity_subscriber.sv"), content)

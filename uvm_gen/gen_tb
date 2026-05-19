@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""UVM Testbench Generator launcher.
+
+Pure launcher: resolves real script path (handles symlinks/shortcuts),
+adds the parent of the package to sys.path, and dispatches to uvm_gen.cli.main.
+
+Install/uninstall the gen_tb shortcut via the setup script at the repo root:
+  ./setup install
+  ./setup uninstall
+"""
+import os
+import sys
+
+if sys.version_info < (3, 6):
+    sys.stderr.write(
+        "Error: Python 3.6+ required (current: %d.%d).\n"
+        % (sys.version_info[0], sys.version_info[1])
+    )
+    sys.exit(1)
+
+_SELF = os.path.realpath(__file__)
+_HERE = os.path.dirname(_SELF)              # .../<repo>/uvm_gen
+_PARENT = os.path.dirname(_HERE)            # .../<repo>
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+
+try:
+    from uvm_gen.cli import main
+except ImportError as e:
+    sys.stderr.write("Error importing uvm_gen: %s\n" % e)
+    sys.stderr.write("Run the setup script to check dependencies:\n")
+    sys.stderr.write("  python3 %s/setup check\n" % os.path.dirname(_PARENT) or ".")
+    sys.exit(1)
+
+if __name__ == "__main__":
+    main()
