@@ -18,10 +18,17 @@ TEST      ?= tc_base
 SEED      ?= 1
 UVM_VER   ?= UVM_MEDIUM
 TIMESCALE ?= 1ns/1ps
-WAVE      ?= fsdb                  # fsdb | vpd | none
-COV       ?= 0                     # 1 = enable coverage
-XPROP     ?= 0                     # 1 = enable xprop
-SIM_DIR   ?= sim                   # top-level output dir (override freely)
+# Waveform format: fsdb | vpd | none
+WAVE      ?= fsdb
+# 1 = enable coverage
+COV       ?= 0
+# 1 = enable xprop
+XPROP     ?= 0
+# Top-level output dir (override freely, e.g. SIM_DIR=sim_v1)
+SIM_DIR   ?= sim
+ifeq ($(strip $(SIM_DIR)),)
+SIM_DIR   := sim
+endif
 
 # ---------------- Derived paths ----------------
 BUILD_DIR := $(SIM_DIR)/build
@@ -112,11 +119,11 @@ help:
 	@echo ""
 
 dirs:
-	@mkdir -p $(BUILD_DIR) $(LOG_DIR) $(WAVE_DIR) $(COV_DIR) $(RUNS_DIR)
+	@mkdir -p $(BUILD_DIR) $(BUILD_DIR)/csrc $(LOG_DIR) $(WAVE_DIR) $(COV_DIR) $(RUNS_DIR)
 
-cmp: dirs $(SIMV)
+cmp: $(SIMV)
 
-$(SIMV): dirs
+$(SIMV): | dirs
 	vcs $(VCS_OPTS)
 
 run: cmp
