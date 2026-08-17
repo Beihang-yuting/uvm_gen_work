@@ -22,6 +22,43 @@ def strip_sv_comments(systemverilog: str) -> str:
     )
 
 
+def sv_macro_calls(source: str, macro: str) -> list[str]:
+    calls = []
+    token = f"`{macro}"
+    search_from = 0
+    while True:
+        start = source.find(token, search_from)
+        if start < 0:
+            return calls
+        opening = source.find("(", start + len(token))
+        assert opening >= 0, f"missing opening parenthesis for `{macro}"
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(opening, len(source)):
+            char = source[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    calls.append(source[start : index + 1])
+                    search_from = index + 1
+                    break
+        else:
+            raise AssertionError(f"unterminated `{macro} call")
+
+
 def core_method_body(
     core: str, declaration: str, description: str, terminator: str = "function"
 ) -> str:
@@ -61,7 +98,7 @@ def assert_core_contract(core_raw: str) -> None:
         ),
         "parameterized scoreboard": (
             r"(?ms)^[ \t]*class\s+common_uvm_scb\s*#\s*\(\s*"
-            r"type\s+TRANS_TYPE\s*=\s*uvm_sequence_item\s*,\s*"
+            r"type\s+TRANS_TYPE\s*,\s*"
             r"int\s+STREAM_ID_WIDTH\s*=\s*64\s*\)\s*"
             r"extends\s+uvm_scoreboard\s*;"
         ),
@@ -122,6 +159,7 @@ def assert_core_contract(core_raw: str) -> None:
         "allowed_drops",
         "unexpected_actuals",
         "overflows",
+        "current_pending",
         "peak_pending",
         "detail_emitted",
         "suppressed_details",
@@ -131,6 +169,18 @@ def assert_core_contract(core_raw: str) -> None:
             rf"(?m)^[ \t]*protected\s+longint\s+unsigned\s+m_{counter}\s*;",
             core,
         ), f"missing protected global counter m_{counter}"
+
+    current_pending_declaration = re.search(
+        r"(?m)^[ \t]*protected\s+longint\s+unsigned\s+m_current_pending\s*;",
+        core,
+    )
+    peak_pending_declaration = re.search(
+        r"(?m)^[ \t]*protected\s+longint\s+unsigned\s+m_peak_pending\s*;",
+        core,
+    )
+    assert current_pending_declaration.start() < peak_pending_declaration.start(), (
+        "current pending gauge must be declared beside and before peak pending"
+    )
 
     build = core_method_body(
         core,
@@ -144,10 +194,18 @@ def assert_core_contract(core_raw: str) -> None:
             ("plusarg value declaration", r"^[ \t]*int\s+value\s*;"),
             ("parent build", r"super\.build_phase\s*\(\s*phase\s*\)\s*;"),
             (
+                "stream-width range guard",
+                r"STREAM_ID_WIDTH\s*<\s*1.*?STREAM_ID_WIDTH\s*>\s*64",
+            ),
+            ("stream-width fatal", r"`uvm_fatal\s*\(\s*\"SCB_CFG\""),
+            (
                 "optional config override",
                 r"uvm_config_db\s*#\s*\(\s*common_uvm_scb_cfg\s*\)::get\s*\("
                 r"\s*this\s*,\s*\"\"\s*,\s*\"cfg\"\s*,\s*configured\s*\)",
             ),
+            ("non-null config guard", r"if\s*\(\s*configured\s*!=\s*null\s*\)"),
+            ("config override assignment", r"m_cfg\s*=\s*configured\s*;"),
+            ("null config warning", r"null cfg override ignored; using default"),
             (
                 "report plusarg only",
                 r"\$value\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=%d\"\s*,\s*value\s*\)",
@@ -157,7 +215,46 @@ def assert_core_contract(core_raw: str) -> None:
             ("report normalization", r"m_cfg\.m_report_limit\s*<\s*-1"),
             ("error-limit normalization", r"m_cfg\.m_err_limit\s*<\s*0"),
             ("pending-limit normalization", r"m_cfg\.m_pending_limit\s*<\s*0"),
+            ("comparison-mode validation", r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)"),
+            ("comparison-mode default", r"default\s*:"),
+            ("comparison-mode warning", r"invalid m_cmp_mode=%0d; using SCB_UNORDERED"),
+            ("comparison-mode fallback", r"m_cfg\.m_cmp_mode\s*=\s*SCB_UNORDERED\s*;"),
         ],
+    )
+    width_guard = re.search(
+        r"if\s*\(\s*\(\s*STREAM_ID_WIDTH\s*<\s*1\s*\)\s*\|\|\s*"
+        r"\(\s*STREAM_ID_WIDTH\s*>\s*64\s*\)\s*\)\s*"
+        r"`uvm_fatal\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
+        r"\"STREAM_ID_WIDTH must be in range 1\.\.64; got %0d\"\s*,\s*"
+        r"STREAM_ID_WIDTH\s*\)\s*\)",
+        build,
+    )
+    assert width_guard, "build_phase must fatally reject stream widths outside 1..64"
+
+    config_override = re.search(
+        r"if\s*\(\s*uvm_config_db\s*#\s*\(\s*common_uvm_scb_cfg\s*\)::get\s*\("
+        r"\s*this\s*,\s*\"\"\s*,\s*\"cfg\"\s*,\s*configured\s*\)\s*\)\s*begin\s*"
+        r"if\s*\(\s*configured\s*!=\s*null\s*\)\s*"
+        r"m_cfg\s*=\s*configured\s*;\s*else\s*"
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+        r"\"null cfg override ignored; using default\"\s*\)\s*end",
+        build,
+    )
+    assert config_override, (
+        "config override must accept non-null handles and warn while retaining defaults on null"
+    )
+
+    invalid_plusarg_branch = re.search(
+        r"if\s*\(\s*\$value\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=%d\"\s*,\s*"
+        r"value\s*\)\s*\)\s*begin\s*if\s*\(\s*value\s*>=\s*-1\s*\)\s*"
+        r"m_cfg\.m_report_limit\s*=\s*value\s*;\s*else\s*begin\s*"
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
+        r"\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*value\s*\)\s*\)\s*"
+        r"m_cfg\.m_report_limit\s*=\s*value\s*;\s*end\s*end",
+        build,
+    )
+    assert invalid_plusarg_branch, (
+        "invalid report plusargs must store the invalid value for common fallback normalization"
     )
     invalid_report_warning = (
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
@@ -171,26 +268,41 @@ def assert_core_contract(core_raw: str) -> None:
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
         r"\"m_pending_limit must be non-negative; using 0\"\s*\)"
     )
-    approved_warnings = [
+    null_config_warning = (
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+        r"\"null cfg override ignored; using default\"\s*\)"
+    )
+    invalid_mode_warning = (
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
+        r"\"invalid m_cmp_mode=%0d; using SCB_UNORDERED\"\s*,\s*"
+        r"m_cfg\.m_cmp_mode\s*\)\s*\)"
+    )
+    required_warnings = [
+        ("null config override", null_config_warning),
         ("invalid report plusarg", invalid_report_warning),
         ("error-limit normalization", error_limit_warning),
         ("pending-limit normalization", pending_limit_warning),
+        ("invalid comparison mode", invalid_mode_warning),
     ]
     warning_positions = []
-    for description, pattern in approved_warnings:
+    for description, pattern in required_warnings:
         matches = list(re.finditer(pattern, build))
         assert len(matches) == 1, (
-            f"build_phase must contain exactly one approved {description} warning"
+            f"build_phase must contain exactly one required {description} warning"
         )
         warning_positions.append(matches[0].start())
-    all_warning_positions = [
-        match.start() for match in re.finditer(r"`uvm_warning\s*\(", build)
-    ]
-    assert all_warning_positions == warning_positions, (
-        "build_phase must contain only the three approved warnings in order"
+    assert warning_positions == sorted(warning_positions), (
+        "configuration warnings must follow config, plusarg, bounds, then mode order"
     )
-    assert not re.search(r"m_report_limit\s+must\b", build), (
-        "config-db report-limit normalization must be silent"
+    report_warning_calls = [
+        call
+        for call in sv_macro_calls(build, "uvm_warning")
+        if re.search(r"report[_ ]limit", call, flags=re.IGNORECASE)
+    ]
+    assert len(report_warning_calls) == 1 and re.fullmatch(
+        invalid_report_warning, report_warning_calls[0]
+    ), (
+        "the invalid plusarg path must be the only report-limit warning"
     )
     report_default_assignment = (
         r"m_cfg\.m_report_limit\s*=\s*10\s*;"
@@ -211,6 +323,16 @@ def assert_core_contract(core_raw: str) -> None:
     assert assignments[0].start() > report_normalization.start(), (
         "report-limit default assignment must occur after its normalization guard"
     )
+
+    mode_validation = re.search(
+        r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)\s*"
+        r"SCB_ORDERED_EXACT\s*,\s*SCB_ORDERED_LOSSY\s*,\s*SCB_UNORDERED\s*:\s*;\s*"
+        r"default\s*:\s*begin\s*"
+        + invalid_mode_warning
+        + r"\s*m_cfg\.m_cmp_mode\s*=\s*SCB_UNORDERED\s*;\s*end\s*endcase",
+        build,
+    )
+    assert mode_validation, "build_phase must normalize invalid comparison modes"
 
     retained = core_method_body(
         core,
@@ -271,10 +393,15 @@ def assert_core_contract(core_raw: str) -> None:
             ("expected retained copy", r"retained_copy\s*\(\s*tr\s*,\s*stream_id\s*,\s*\"expected\""),
             ("expected admission", r"can_enqueue\s*\(\s*state\s*,\s*stream_id\s*,\s*\"expected\""),
             ("expected enqueue", r"state\.expected_q\.push_back\s*\(\s*new\s*\(\s*retained\s*,\s*kind\s*\)\s*\)\s*;"),
+            ("expected pending gauge increment", r"m_current_pending\s*\+\+\s*;"),
             ("expected peak update", r"update_peak\s*\(\s*state\s*\)\s*;"),
             ("expected dispatch", r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)"),
             ("expected unordered dispatch", r"SCB_UNORDERED\s*:\s*reconcile_unordered_expected\s*\(\s*state\s*\)\s*;"),
+            ("expected defensive default", r"default\s*:\s*reconcile_unordered_expected\s*\(\s*state\s*\)\s*;"),
         ],
+    )
+    assert len(re.findall(r"m_current_pending\s*\+\+\s*;", expected_push)) == 1, (
+        "each successful expected enqueue must increment the gauge exactly once"
     )
 
     actual_push = core_method_body(
@@ -300,10 +427,37 @@ def assert_core_contract(core_raw: str) -> None:
             ("actual retained copy", r"retained_copy\s*\(\s*tr\s*,\s*stream_id\s*,\s*\"actual\""),
             ("actual admission", r"can_enqueue\s*\(\s*state\s*,\s*stream_id\s*,\s*\"actual\""),
             ("actual enqueue", r"state\.actual_q\.push_back\s*\(\s*new\s*\(\s*retained\s*,\s*kind\s*\)\s*\)\s*;"),
+            ("actual pending gauge increment", r"m_current_pending\s*\+\+\s*;"),
             ("actual peak update", r"update_peak\s*\(\s*state\s*\)\s*;"),
             ("actual dispatch", r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)"),
             ("actual unordered dispatch", r"SCB_UNORDERED\s*:\s*reconcile_unordered_actual\s*\(\s*state\s*\)\s*;"),
+            ("actual defensive default", r"default\s*:\s*reconcile_unordered_actual\s*\(\s*state\s*\)\s*;"),
         ],
+    )
+    assert len(re.findall(r"m_current_pending\s*\+\+\s*;", actual_push)) == 1, (
+        "each successful actual enqueue must increment the gauge exactly once"
+    )
+
+    peak_update = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::update_peak\s*\([^;]+\)",
+        "update_peak",
+    )
+    assert_positions_in_order(
+        peak_update,
+        [
+            ("stream depth declaration", r"^[ \t]*longint\s+unsigned\s+depth\s*;"),
+            ("stream depth calculation", r"depth\s*=\s*state\.expected_q\.size\s*\(\s*\)\s*\+\s*state\.actual_q\.size\s*\(\s*\)\s*;"),
+            ("stream peak update", r"if\s*\(\s*depth\s*>\s*state\.peak_pending\s*\)\s*state\.peak_pending\s*=\s*depth\s*;"),
+            ("global peak comparison", r"if\s*\(\s*m_current_pending\s*>\s*m_peak_pending\s*\)"),
+            ("global peak update", r"m_peak_pending\s*=\s*m_current_pending\s*;"),
+        ],
+    )
+    assert not re.search(r"foreach\s*\(\s*m_streams\b", peak_update), (
+        "global pending peak must not scan the stream map"
+    )
+    assert "total_depth" not in peak_update, (
+        "global pending peak must use the O(1) current-pending gauge"
     )
 
     compare = core_method_body(
@@ -312,9 +466,10 @@ def assert_core_contract(core_raw: str) -> None:
         "compare_items",
     )
     assert re.search(
+        r"diff\s*=\s*\"\"\s*;\s*"
         r"return\s+expected\.self_define_do_compare\s*\(\s*actual\s*,\s*diff\s*,\s*kind\s*\)\s*;",
         compare,
-    ), "compare_items must delegate to self_define_do_compare"
+    ), "compare_items must clear diff immediately before delegating"
 
     exact = core_method_body(
         core,
@@ -361,11 +516,14 @@ def assert_core_contract(core_raw: str) -> None:
     assert_positions_in_order(
         unordered_expected,
         [
+            ("unordered expected declaration", r"^[ \t]*pending_t\s+expected\s*;"),
+            ("unordered actual declaration", r"^[ \t]*pending_t\s+actual\s*;"),
             ("newest expected", r"expected\s*=\s*state\.expected_q\s*\[\s*state\.expected_q\.size\s*\(\s*\)\s*-\s*1\s*\]\s*;"),
             ("unordered expected scans actuals", r"foreach\s*\(\s*state\.actual_q\s*\[\s*i\s*\]\s*\)"),
+            ("unordered expected captures actual", r"actual\s*=\s*state\.actual_q\s*\[\s*match_index\s*\]\s*;"),
             ("unordered expected removes newest", r"state\.expected_q\.pop_back\s*\(\s*\)"),
-            ("unordered expected match", r"record_match\s*\(\s*state\s*,\s*expected\s*,\s*state\.actual_q\s*\[\s*match_index\s*\]"),
             ("unordered expected removes matched actual", r"state\.actual_q\.delete\s*\(\s*match_index\s*\)\s*;"),
+            ("unordered expected match", r"record_match\s*\(\s*state\s*,\s*expected\s*,\s*actual\s*,\s*diff\s*\)\s*;"),
         ],
     )
 
@@ -377,11 +535,14 @@ def assert_core_contract(core_raw: str) -> None:
     assert_positions_in_order(
         unordered_actual,
         [
+            ("unordered actual declaration", r"^[ \t]*pending_t\s+actual\s*;"),
+            ("unordered expected declaration", r"^[ \t]*pending_t\s+expected\s*;"),
             ("newest actual", r"actual\s*=\s*state\.actual_q\s*\[\s*state\.actual_q\.size\s*\(\s*\)\s*-\s*1\s*\]\s*;"),
             ("unordered actual scans expecteds", r"foreach\s*\(\s*state\.expected_q\s*\[\s*i\s*\]\s*\)"),
+            ("unordered actual captures expected", r"expected\s*=\s*state\.expected_q\s*\[\s*match_index\s*\]\s*;"),
             ("unordered actual removes newest", r"state\.actual_q\.pop_back\s*\(\s*\)"),
-            ("unordered actual match", r"record_match\s*\(\s*state\s*,\s*state\.expected_q\s*\[\s*match_index\s*\]\s*,\s*actual"),
             ("unordered actual removes matched expected", r"state\.expected_q\.delete\s*\(\s*match_index\s*\)\s*;"),
+            ("unordered actual match", r"record_match\s*\(\s*state\s*,\s*expected\s*,\s*actual\s*,\s*diff\s*\)\s*;"),
         ],
     )
 
@@ -424,6 +585,67 @@ def assert_core_contract(core_raw: str) -> None:
             assert position >= 0, f"missing core {method} accounting token {token}"
             assert position > previous, f"core {method} accounting is out of order"
             previous = position
+
+    match_accounting = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::record_match\s*\([^;]+\)",
+        "record_match",
+    )
+    mismatch_accounting = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::record_mismatch\s*\([^;]+\)",
+        "record_mismatch",
+    )
+    drop_accounting = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::record_drop\s*\([^;]+\)",
+        "record_drop",
+    )
+    unexpected_accounting = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::record_unexpected\s*\([^;]+\)",
+        "record_unexpected",
+    )
+    overflow_accounting = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::record_overflow\s*\([^;]+\)",
+        "record_overflow",
+    )
+    expected_decrement = (
+        r"if\s*\(\s*expected\s*!=\s*null\s*\)\s*m_current_pending\s*--\s*;"
+    )
+    actual_decrement = (
+        r"if\s*\(\s*actual\s*!=\s*null\s*\)\s*m_current_pending\s*--\s*;"
+    )
+    for description, body in (
+        ("match", match_accounting),
+        ("mismatch", mismatch_accounting),
+    ):
+        expected_match = re.search(expected_decrement, body)
+        actual_match = re.search(actual_decrement, body)
+        first_counter = re.search(r"state\.(?:matches|mismatches)\s*\+\+\s*;", body)
+        assert expected_match and actual_match and first_counter, (
+            f"{description} must decrement every non-null consumed side"
+        )
+        assert len(re.findall(expected_decrement, body)) == 1
+        assert len(re.findall(actual_decrement, body)) == 1
+        assert expected_match.start() < actual_match.start() < first_counter.start(), (
+            f"{description} pending decrements must precede result accounting"
+        )
+    assert re.search(expected_decrement, drop_accounting), (
+        "drop must decrement its consumed non-null expected item"
+    )
+    assert len(re.findall(expected_decrement, drop_accounting)) == 1
+    assert re.search(actual_decrement, unexpected_accounting), (
+        "unexpected must decrement its consumed non-null actual item"
+    )
+    assert len(re.findall(actual_decrement, unexpected_accounting)) == 1
+    assert "m_current_pending" not in overflow_accounting, (
+        "overflow must not change the admitted-pending gauge"
+    )
+    assert not re.search(
+        r"if\s*\([^)]*m_current_pending[^)]*(?:>|!=)\s*0", core
+    ), "pending decrements must not hide accounting bugs with underflow guards"
 
     details = core_method_body(
         core,
@@ -511,6 +733,37 @@ def test_standalone_core_template_implements_task5_comparison_contract():
     assert_core_contract(core_raw)
 
     mutations = {
+        "default transaction type": (
+            r"type TRANS_TYPE,",
+            r"type TRANS_TYPE=uvm_sequence_item,",
+        ),
+        "unconditional null config assignment": (
+            r"(?s)if \(uvm_config_db#\(common_uvm_scb_cfg\)::get\(this, \"\", \"cfg\", configured\)\) begin\s*"
+            r"if \(configured != null\)\s*m_cfg = configured;\s*else\s*"
+            r"`uvm_warning\(\"SCB_CFG\", \"null cfg override ignored; using default\"\)\s*end",
+            r"if (uvm_config_db#(common_uvm_scb_cfg)::get(this, \"\", \"cfg\", configured))\n"
+            r"        m_cfg = configured;",
+        ),
+        "invalid plusarg does not force common fallback": (
+            r"(?s)(else begin\s*`uvm_warning\(\"SCB_CFG\",\s*"
+            r"\$sformatf\(\"invalid SCB_REPORT_LIMIT=%0d; using 10\", value\)\))\s*"
+            r"m_cfg\.m_report_limit = value;",
+            r"\1",
+        ),
+        "missing stream width guard": (
+            r"(?s)if \(\(STREAM_ID_WIDTH < 1\) \|\| \(STREAM_ID_WIDTH > 64\)\)\s*"
+            r"`uvm_fatal\(\"SCB_CFG\",\s*\$sformatf\("
+            r"\"STREAM_ID_WIDTH must be in range 1\.\.64; got %0d\",\s*STREAM_ID_WIDTH\)\)",
+            "",
+        ),
+        "missing comparison mode validation": (
+            r"(?s)case \(m_cfg\.m_cmp_mode\)\s*"
+            r"SCB_ORDERED_EXACT, SCB_ORDERED_LOSSY, SCB_UNORDERED: ;\s*"
+            r"default: begin\s*`uvm_warning\(\"SCB_CFG\",\s*\$sformatf\("
+            r"\"invalid m_cmp_mode=%0d; using SCB_UNORDERED\",\s*m_cfg\.m_cmp_mode\)\)\s*"
+            r"m_cfg\.m_cmp_mode = SCB_UNORDERED;\s*end\s*endcase",
+            "",
+        ),
         "missing clone call": (
             r"(?m)^[ \t]*cloned\s*=\s*source\.clone\s*\(\s*\)\s*;[ \t]*$",
             "",
@@ -522,6 +775,65 @@ def test_standalone_core_template_implements_task5_comparison_contract():
         "blocking expected API": (
             r"extern function void push_expected",
             "extern task push_expected",
+        ),
+        "missing expected pending increment": (
+            r"(?s)(function void common_uvm_scb::push_expected\b.*?"
+            r"state\.expected_q\.push_back\(new\(retained, kind\)\);)\s*"
+            r"m_current_pending\+\+;",
+            r"\1",
+        ),
+        "missing actual pending increment": (
+            r"(?s)(function void common_uvm_scb::push_actual\b.*?"
+            r"state\.actual_q\.push_back\(new\(retained, kind\)\);)\s*"
+            r"m_current_pending\+\+;",
+            r"\1",
+        ),
+        "missing expected default dispatch": (
+            r"default:\s*reconcile_unordered_expected\(state\);",
+            "",
+        ),
+        "missing actual default dispatch": (
+            r"default:\s*reconcile_unordered_actual\(state\);",
+            "",
+        ),
+        "old global peak stream scan": (
+            r"(?ms)^function void common_uvm_scb::update_peak\(state_t state\);.*?"
+            r"^endfunction",
+            "function void common_uvm_scb::update_peak(state_t state);\n"
+            "    longint unsigned depth;\n"
+            "    longint unsigned total_depth;\n"
+            "    depth = state.expected_q.size() + state.actual_q.size();\n"
+            "    total_depth = 0;\n"
+            "    if (depth > state.peak_pending) state.peak_pending = depth;\n"
+            "    foreach (m_streams[id])\n"
+            "        total_depth += m_streams[id].expected_q.size()\n"
+            "                     + m_streams[id].actual_q.size();\n"
+            "    if (total_depth > m_peak_pending) m_peak_pending = total_depth;\n"
+            "endfunction",
+        ),
+        "missing match actual decrement": (
+            r"(?s)(function void common_uvm_scb::record_match\b.*?)"
+            r"if \(actual != null\) m_current_pending--;",
+            r"\1",
+        ),
+        "missing mismatch expected decrement": (
+            r"(?s)(function void common_uvm_scb::record_mismatch\b.*?)"
+            r"if \(expected != null\) m_current_pending--;",
+            r"\1",
+        ),
+        "missing drop decrement": (
+            r"(?s)(function void common_uvm_scb::record_drop\b.*?)"
+            r"if \(expected != null\) m_current_pending--;",
+            r"\1",
+        ),
+        "missing unexpected decrement": (
+            r"(?s)(function void common_uvm_scb::record_unexpected\b.*?)"
+            r"if \(actual != null\) m_current_pending--;",
+            r"\1",
+        ),
+        "missing deterministic diff reset": (
+            r"diff = \"\";\s*(return expected\.self_define_do_compare)",
+            r"\1",
         ),
         "early lossy classification": (
             r"if \(match_index < 0\) return;",
@@ -535,9 +847,9 @@ def test_standalone_core_template_implements_task5_comparison_contract():
             "if (1) begin",
         ),
         "extra report warning and early assignment": (
-            r"(?s)else\s+(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+            r"(?s)else begin\s*(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
             r"\$sformatf\s*\(\s*\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*"
-            r"value\s*\)\s*\))\s*end\s*"
+            r"value\s*\)\s*\))\s*m_cfg\.m_report_limit\s*=\s*value\s*;\s*end\s*end\s*"
             r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*"
             r"m_cfg\.m_report_limit\s*=\s*10\s*;",
             r"else begin\n            \g<warning>\n"
@@ -570,4 +882,3 @@ def test_standalone_core_template_implements_task5_comparison_contract():
         assert replacements == 1, f"failed to construct {description} mutation"
         with pytest.raises(AssertionError):
             assert_core_contract(broken)
-
