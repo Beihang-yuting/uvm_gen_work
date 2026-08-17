@@ -58,13 +58,13 @@ task {{ name }}_drv::run_phase(uvm_phase phase);
 endtask : run_phase
 
 task {{ name }}_drv::master_drive();
-    //TODO: 实现 master 驱动逻辑
-    `uvm_info(get_full_name, "master_drive started", UVM_NONE)
+    `uvm_warning("{{ name_upper }}_DRV_PLACEHOLDER", "master_drive is unimplemented; blocking until reset assertion")
+    @(negedge m_vif.rst_n);
 endtask : master_drive
 
 task {{ name }}_drv::slave_drive();
-    //TODO: 实现 slave 驱动逻辑
-    `uvm_info(get_full_name, "slave_drive started", UVM_NONE)
+    `uvm_warning("{{ name_upper }}_DRV_PLACEHOLDER", "slave_drive is unimplemented; blocking until reset assertion")
+    @(negedge m_vif.rst_n);
 endtask : slave_drive
 
 // 复位时清理总线信号（用户 override 实现具体协议信号归零）
