@@ -171,3 +171,43 @@ def test_common_package_includes_scoreboard_dependencies_in_order(
         "scoreboard package include sequence mismatch: "
         f"expected {required_includes}, got {scoreboard_includes}"
     )
+
+
+def test_v2_types_expose_approved_defaults(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    types_path = project / "common/common_scb_types.sv"
+    assert types_path.is_file(), "missing generated v2 types contract file"
+
+    types = strip_sv_comments(read(project, "common/common_scb_types.sv"))
+    for declaration in [
+        "SCB_ORDERED_EXACT",
+        "SCB_ORDERED_LOSSY",
+        "SCB_UNORDERED",
+        "m_report_limit = 10",
+        "m_err_limit = 10",
+        "m_pending_limit = 0",
+        "m_clone_en = 1",
+        "m_strict_arrival = 0",
+    ]:
+        assert declaration in types, f"missing v2 types declaration: {declaration}"
+
+
+def test_reporter_uses_structured_cells_and_per_column_widths(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    reporter_path = project / "common/common_scb_reporter.sv"
+    assert reporter_path.is_file(), "missing generated v2 reporter contract file"
+
+    reporter = strip_sv_comments(read(project, "common/common_scb_reporter.sv"))
+    for declaration in [
+        "class common_scb_reporter",
+        "string m_headers[$]",
+        "int m_widths[$]",
+        "function void add_row",
+        "function string render",
+    ]:
+        assert declaration in reporter, (
+            f"missing structured reporter declaration: {declaration}"
+        )
+    assert "insert_line_content" not in reporter, (
+        "structured reporter must not use legacy insert_line_content"
+    )

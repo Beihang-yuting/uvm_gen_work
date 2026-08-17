@@ -1,0 +1,80 @@
+{{ header(file_name) }}
+`ifndef COMMON_SCB_TYPES__SV
+`define COMMON_SCB_TYPES__SV
+
+typedef enum int {
+    SCB_ORDERED_EXACT,
+    SCB_ORDERED_LOSSY,
+    SCB_UNORDERED
+} common_scb_cmp_mode_e;
+
+typedef enum int {SCB_PASS, SCB_WARN, SCB_FAIL} scb_status_e;
+
+class common_uvm_scb_cfg extends uvm_object;
+    `uvm_object_utils(common_uvm_scb_cfg)
+    common_scb_cmp_mode_e m_cmp_mode = SCB_UNORDERED;
+    int m_report_limit = 10;
+    int m_err_limit = 10;
+    int m_pending_limit = 0;
+    bit m_report_en = 1;
+    bit m_clone_en = 1;
+    bit m_strict_arrival = 0;
+
+    function new(string name="common_uvm_scb_cfg");
+        super.new(name);
+    endfunction
+endclass
+
+class common_scb_pending_item #(type TRANS_TYPE=uvm_sequence_item);
+    TRANS_TYPE tr;
+    int kind;
+    function new(TRANS_TYPE tr=null, int kind=-1);
+        this.tr = tr;
+        this.kind = kind;
+    endfunction
+endclass
+
+class common_scb_result #(type TRANS_TYPE=uvm_sequence_item) extends uvm_object;
+    `uvm_object_param_utils(common_scb_result #(TRANS_TYPE))
+    TRANS_TYPE expected;
+    TRANS_TYPE actual;
+    longint unsigned stream_id;
+    int kind;
+    bit matched;
+    string diff;
+    function new(string name="common_scb_result");
+        super.new(name);
+    endfunction
+endclass
+
+class common_scb_stream_state #(type TRANS_TYPE=uvm_sequence_item);
+    typedef common_scb_pending_item#(TRANS_TYPE) pending_t;
+    pending_t expected_q[$];
+    pending_t actual_q[$];
+    longint unsigned stream_id;
+    longint unsigned expected_inputs;
+    longint unsigned actual_inputs;
+    longint unsigned matches;
+    longint unsigned mismatches;
+    longint unsigned allowed_drops;
+    longint unsigned unexpected_actuals;
+    longint unsigned overflows;
+    longint unsigned peak_pending;
+    longint unsigned suppressed_details;
+    function new(longint unsigned stream_id=0);
+        this.stream_id = stream_id;
+    endfunction
+    function longint unsigned issue_count();
+        return mismatches + unexpected_actuals + overflows
+             + expected_q.size() + actual_q.size();
+    endfunction
+endclass
+
+class common_scb_problem_row;
+    scb_status_e status;
+    longint unsigned stream_id;
+    longint unsigned issue_count;
+    string cells[$];
+endclass
+
+`endif

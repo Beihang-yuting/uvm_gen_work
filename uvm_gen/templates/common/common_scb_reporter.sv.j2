@@ -1,0 +1,65 @@
+{{ header(file_name) }}
+`ifndef COMMON_SCB_REPORTER__SV
+`define COMMON_SCB_REPORTER__SV
+
+class common_scb_report_row;
+    string cells[$];
+endclass
+
+class common_scb_reporter;
+    string m_headers[$];
+    bit m_numeric[$];
+    int m_widths[$];
+    common_scb_report_row m_rows[$];
+
+    function void set_columns(input string headers[$], input bit numeric[$]);
+        m_headers = headers;
+        m_numeric = numeric;
+        m_widths.delete();
+        foreach (m_headers[i]) m_widths.push_back(m_headers[i].len());
+    endfunction
+
+    function void add_row(input string cells[$]);
+        common_scb_report_row row = new();
+        if (cells.size() != m_headers.size())
+            return;
+        row.cells = cells;
+        foreach (cells[i])
+            if (cells[i].len() > m_widths[i]) m_widths[i] = cells[i].len();
+        m_rows.push_back(row);
+    endfunction
+
+    local function string repeat_char(string value, int count);
+        string result = "";
+        repeat (count) result = {result, value};
+        return result;
+    endfunction
+
+    local function string format_cell(string value, int width, bit numeric);
+        int padding = width - value.len();
+        if (numeric) return {repeat_char(" ", padding), value};
+        return {value, repeat_char(" ", padding)};
+    endfunction
+
+    local function string border();
+        string line = "+";
+        foreach (m_widths[i]) line = {line, repeat_char("-", m_widths[i]+2), "+"};
+        return line;
+    endfunction
+
+    local function string render_cells(input string cells[$]);
+        string line = "|";
+        foreach (cells[i])
+            line = {line, " ", format_cell(cells[i], m_widths[i], m_numeric[i]), " |"};
+        return line;
+    endfunction
+
+    function string render();
+        string text;
+        text = {border(), "\n", render_cells(m_headers), "\n", border()};
+        foreach (m_rows[i]) text = {text, "\n", render_cells(m_rows[i].cells)};
+        return {text, "\n", border()};
+    endfunction
+endclass
+
+`endif
