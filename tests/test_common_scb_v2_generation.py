@@ -56,12 +56,11 @@ def test_standalone_registry_template_exposes_aip_independent_control_api():
         platform_type=PlatformType.ADVANCE,
         aip_core=False,
     )
-    registry = strip_sv_comments(
-        PlatformGenerator(config).render_template(
-            "common/common_scb_registry.sv.j2",
-            file_name="common_scb_registry.sv",
-        )
+    registry_raw = PlatformGenerator(config).render_template(
+        "common/common_scb_registry.sv.j2",
+        file_name="common_scb_registry.sv",
     )
+    registry = strip_sv_comments(registry_raw)
 
     declarations = {
         "include guard": (
@@ -126,10 +125,10 @@ def test_standalone_registry_template_exposes_aip_independent_control_api():
     assert re.search(r"\bnames\.sort[ \t]*\([ \t]*\)[ \t]*;", registry), (
         "registry names must be sorted deterministically"
     )
-    assert not re.search(r"\baip_|AIP_", registry), (
+    assert not re.search(r"\baip_|AIP_", registry_raw), (
         "registry must not depend on AIP identifiers or tokens"
     )
-    assert "{{" not in registry and "{%" not in registry, (
+    assert "{{" not in registry_raw and "{%" not in registry_raw, (
         "registry render must not retain Jinja markers"
     )
 
