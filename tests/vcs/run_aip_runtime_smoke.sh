@@ -63,9 +63,17 @@ compile_and_run_base() {
     local run_log="run_${label}_base.log"
     local -a aip_compile_options=()
 
-    if [[ ${aip_core_enabled} == true ]]; then
-        aip_compile_options=(-debug_access+all -lca)
-    fi
+    case ${aip_core_enabled} in
+        true)
+            aip_compile_options=(-debug_access+all -lca)
+            ;;
+        false) ;;
+        *)
+            printf 'AIP runtime %s: AIP_ENABLED must be true or false (got %s)\n' \
+                "${label}" "${aip_core_enabled}" >&2
+            return 2
+            ;;
+    esac
 
     (
         cd "${project_dir}/cfg"

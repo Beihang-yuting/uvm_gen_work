@@ -1,4 +1,7 @@
+import os
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -29,6 +32,11 @@ def generate(tmp_path: Path, platform_type: PlatformType, aip_core: bool) -> Pat
 
 def read(project_dir: Path, relative_path: str) -> str:
     return (project_dir / relative_path).read_text(encoding="utf-8")
+
+
+def write_executable(path: Path, contents: str) -> None:
+    path.write_text(textwrap.dedent(contents), encoding="utf-8")
+    path.chmod(0o755)
 
 
 def assert_in_order(text: str, *snippets: str) -> None:
@@ -166,25 +174,159 @@ def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):
         "+UVM_TESTNAME=tc_tcl"
     ) in tcl_demo
     assert "-do" not in tcl_demo
-    assert_in_order(
-        tcl_demo,
+    executable_lines = [
+        line.strip()
+        for line in tcl_demo.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert executable_lines.count("run") == 1
+    assert executable_lines[-2:] == [
         "end_test idle=1us timeout=10us",
-        "\nrun\n",
+        "run",
+    ]
+
+
+def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
+    runtime_gate = (
+        Path(__file__).parent.parent / "tests/vcs/run_aip_runtime_smoke.sh"
+    )
+    labels = ("advance_off", "advance_on", "port_off", "port_on")
+    projects = {label: tmp_path / label for label in labels}
+    for project_dir in projects.values():
+        (project_dir / "cfg").mkdir(parents=True)
+
+    aip_core_dir = tmp_path / "aip_core"
+    aip_core_dir.mkdir()
+    calls_dir = tmp_path / "vcs_calls"
+    calls_dir.mkdir()
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        while (($#)); do
+            case $1 in
+                --kill-after=*|-*) shift ;;
+                --) shift; break ;;
+                *) shift; break ;;
+            esac
+        done
+        exec "$@"
+        """,
+    )
+    write_executable(
+        stub_bin / "vcs",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        label=$(basename "$(dirname "${PWD}")")
+        printf '%s\\n' "${label}" >> "${VCS_CALLS_DIR}/calls"
+        printf '%s\\n' "$@" > "${VCS_CALLS_DIR}/${label}.argv"
+
+        simv=simv
+        while (($#)); do
+            if [[ $1 == -o ]]; then
+                simv=$2
+                break
+            fi
+            shift
+        done
+
+        cat > "${simv}" <<'SIMV'
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        log_file=
+        while (($#)); do
+            case $1 in
+                -l)
+                    log_file=$2
+                    shift 2
+                    ;;
+                *) shift ;;
+            esac
+        done
+        [[ -n ${log_file} ]]
+        printf '@ 1ns\\nTC PASSED.(warning:0,error:0,fatal:0)\\n' > "${log_file}"
+        SIMV
+        chmod +x "${simv}"
+        """,
     )
 
+    env = os.environ.copy()
+    env["PATH"] = f"{stub_bin}:{env['PATH']}"
+    env["VCS_CALLS_DIR"] = str(calls_dir)
+    completed = subprocess.run(
+        [
+            "bash",
+            str(runtime_gate),
+            *(str(projects[label]) for label in labels),
+            str(aip_core_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
 
-def test_vcs_runtime_gate_enables_ucli_visibility_for_aip_only():
+    assert completed.returncode == 0, completed.stderr
+    assert (calls_dir / "calls").read_text(encoding="utf-8").splitlines() == [
+        "advance_off",
+        "advance_on",
+        "port_off",
+        "port_on",
+    ]
+    compile_argv = {
+        label: (calls_dir / f"{label}.argv")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        for label in labels
+    }
+    for label in ("advance_on", "port_on"):
+        assert "-debug_access+all" in compile_argv[label]
+        assert "-lca" in compile_argv[label]
+    for label in ("advance_off", "port_off"):
+        assert "-debug_access+all" not in compile_argv[label]
+        assert "-lca" not in compile_argv[label]
+
+
+def test_vcs_runtime_gate_rejects_invalid_aip_compile_flag(tmp_path):
     runtime_gate = read(
         Path(__file__).parent.parent, "tests/vcs/run_aip_runtime_smoke.sh"
     )
+    runtime_gate = runtime_gate.replace(
+        'compile_and_run_base "${advance_off}" advance_off false',
+        'compile_and_run_base "${advance_off}" advance_off invalid',
+        1,
+    )
+    test_runtime_gate = tmp_path / "run_aip_runtime_smoke.sh"
+    write_executable(test_runtime_gate, runtime_gate)
 
-    assert "local aip_core_enabled=$3" in runtime_gate
-    assert 'if [[ ${aip_core_enabled} == true ]]; then' in runtime_gate
-    assert "aip_compile_options=(-debug_access+all -lca)" in runtime_gate
-    assert 'compile_and_run_base "${advance_off}" advance_off false' in runtime_gate
-    assert 'compile_and_run_base "${advance_on}" advance_on true' in runtime_gate
-    assert 'compile_and_run_base "${port_off}" port_off false' in runtime_gate
-    assert 'compile_and_run_base "${port_on}" port_on true' in runtime_gate
+    completed = subprocess.run(
+        [
+            "bash",
+            str(test_runtime_gate),
+            str(tmp_path / "advance_off"),
+            str(tmp_path / "advance_on"),
+            str(tmp_path / "port_off"),
+            str(tmp_path / "port_on"),
+            str(tmp_path / "aip_core"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stderr == (
+        "AIP runtime advance_off: AIP_ENABLED must be true or false "
+        "(got invalid)\n"
+    )
 
 
 def test_non_aip_output_excludes_aip_integration(tmp_path, platform_type):
