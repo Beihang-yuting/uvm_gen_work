@@ -1,0 +1,414 @@
+{{ header(file_name) }}
+`ifndef COMMON_UVM_SCB__SV
+`define COMMON_UVM_SCB__SV
+
+class common_uvm_scb #(type TRANS_TYPE=uvm_sequence_item,
+                       int STREAM_ID_WIDTH=64) extends uvm_scoreboard;
+    typedef bit [STREAM_ID_WIDTH-1:0] stream_id_t;
+    typedef common_scb_pending_item#(TRANS_TYPE) pending_t;
+    typedef common_scb_stream_state#(TRANS_TYPE) state_t;
+    typedef common_scb_result#(TRANS_TYPE) result_t;
+
+    `uvm_component_param_utils(common_uvm_scb #(TRANS_TYPE, STREAM_ID_WIDTH))
+
+    common_uvm_scb_cfg m_cfg;
+    uvm_analysis_port#(result_t) m_result_ap;
+    protected state_t m_streams[stream_id_t];
+    protected longint unsigned m_expected_inputs;
+    protected longint unsigned m_actual_inputs;
+    protected longint unsigned m_matches;
+    protected longint unsigned m_mismatches;
+    protected longint unsigned m_allowed_drops;
+    protected longint unsigned m_unexpected_actuals;
+    protected longint unsigned m_overflows;
+    protected longint unsigned m_peak_pending;
+    protected longint unsigned m_detail_emitted;
+    protected longint unsigned m_suppressed_details;
+    protected bit m_strict_arrival_warned;
+    protected bit m_finalized;
+
+    extern function new(string name="common_uvm_scb", uvm_component parent=null);
+    extern virtual function void build_phase(uvm_phase phase);
+    extern virtual function bit compare_items(TRANS_TYPE expected,
+                                               TRANS_TYPE actual,
+                                               int kind,
+                                               output string diff);
+    extern function void push_expected(TRANS_TYPE tr,
+                                       stream_id_t stream_id='1,
+                                       int kind=-1);
+    extern function void push_actual(TRANS_TYPE tr,
+                                     stream_id_t stream_id='1,
+                                     int kind=-1);
+    extern function scb_status_e get_status();
+    extern function bit is_clean();
+    extern function string get_summary();
+    extern function void print_report(int limit=-2);
+    extern function void reset_state(bit clear_counters=1);
+    extern virtual function void check_phase(uvm_phase phase);
+    extern virtual function void report_phase(uvm_phase phase);
+
+    extern virtual task send_rm_trans_to_cmp(TRANS_TYPE rm_tr,
+                                              stream_id_t stream_id='1,
+                                              int kind=-1);
+    extern virtual task send_dut_trans_to_cmp(TRANS_TYPE dut_tr,
+                                               stream_id_t stream_id='1,
+                                               int kind=-1);
+
+    protected extern function state_t state_for(stream_id_t stream_id);
+    protected extern function bit retained_copy(TRANS_TYPE source,
+                                                 stream_id_t stream_id,
+                                                 string side,
+                                                 output TRANS_TYPE retained);
+    protected extern function bit can_enqueue(state_t state,
+                                               stream_id_t stream_id,
+                                               string side,
+                                               int depth);
+    protected extern function void reconcile_ordered_exact(state_t state);
+    protected extern function void reconcile_ordered_lossy(state_t state);
+    protected extern function void reconcile_unordered_expected(state_t state);
+    protected extern function void reconcile_unordered_actual(state_t state);
+    protected extern function void record_match(state_t state,
+                                                 pending_t expected,
+                                                 pending_t actual,
+                                                 string diff="");
+    protected extern function void record_mismatch(state_t state,
+                                                    pending_t expected,
+                                                    pending_t actual,
+                                                    string diff);
+    protected extern function void record_drop(state_t state, pending_t expected);
+    protected extern function void record_unexpected(state_t state, pending_t actual,
+                                                      string reason);
+    protected extern function void record_overflow(state_t state,
+                                                    stream_id_t stream_id,
+                                                    string side,
+                                                    TRANS_TYPE tr,
+                                                    int kind);
+    protected extern function void emit_detail(stream_id_t stream_id,
+                                                string id,
+                                                string message);
+    protected extern function void publish_result(state_t state,
+                                                  pending_t expected,
+                                                  pending_t actual,
+                                                  bit matched,
+                                                  string diff);
+    protected extern function void update_peak(state_t state);
+    protected extern function void finalize_pending();
+endclass
+
+function common_uvm_scb::new(string name="common_uvm_scb",
+                             uvm_component parent=null);
+    super.new(name, parent);
+    m_cfg = new();
+    m_result_ap = new("m_result_ap", this);
+endfunction
+
+function void common_uvm_scb::build_phase(uvm_phase phase);
+    common_uvm_scb_cfg configured;
+    int value;
+    super.build_phase(phase);
+    if (uvm_config_db#(common_uvm_scb_cfg)::get(this, "", "cfg", configured))
+        m_cfg = configured;
+    if ($value$plusargs("SCB_REPORT_LIMIT=%d", value)) begin
+        if (value >= -1)
+            m_cfg.m_report_limit = value;
+        else begin
+            `uvm_warning("SCB_CFG",
+                         $sformatf("invalid SCB_REPORT_LIMIT=%0d; using 10", value))
+            m_cfg.m_report_limit = 10;
+        end
+    end
+    if (m_cfg.m_report_limit < -1) begin
+        `uvm_warning("SCB_CFG", "m_report_limit must be -1 or greater; using 10")
+        m_cfg.m_report_limit = 10;
+    end
+    if (m_cfg.m_err_limit < 0) begin
+        `uvm_warning("SCB_CFG", "m_err_limit must be non-negative; using 10")
+        m_cfg.m_err_limit = 10;
+    end
+    if (m_cfg.m_pending_limit < 0) begin
+        `uvm_warning("SCB_CFG", "m_pending_limit must be non-negative; using 0")
+        m_cfg.m_pending_limit = 0;
+    end
+endfunction
+
+function common_uvm_scb::state_t common_uvm_scb::state_for(
+    stream_id_t stream_id
+);
+    if (!m_streams.exists(stream_id))
+        m_streams[stream_id] = new(stream_id);
+    return m_streams[stream_id];
+endfunction
+
+function bit common_uvm_scb::retained_copy(TRANS_TYPE source,
+                                           stream_id_t stream_id,
+                                           string side,
+                                           output TRANS_TYPE retained);
+    uvm_object cloned;
+    state_t state;
+    state = state_for(stream_id);
+    retained = null;
+    if (source == null) begin
+        record_overflow(state, stream_id, side, source, -1);
+        emit_detail(stream_id, "SCB_NULL_INPUT", {side, " input is null"});
+        return 0;
+    end
+    if (!m_cfg.m_clone_en) begin
+        retained = source;
+        return 1;
+    end
+    cloned = source.clone();
+    if ((cloned == null) || !$cast(retained, cloned)) begin
+        record_overflow(state, stream_id, side, source, -1);
+        emit_detail(stream_id, "SCB_CLONE_FAILED",
+                    {side, " input clone failed typed cast"});
+        return 0;
+    end
+    return 1;
+endfunction
+
+function bit common_uvm_scb::can_enqueue(state_t state,
+                                         stream_id_t stream_id,
+                                         string side,
+                                         int depth);
+    if ((m_cfg.m_pending_limit != 0) && (depth >= m_cfg.m_pending_limit)) begin
+        record_overflow(state, stream_id, side, null, -1);
+        emit_detail(stream_id, "SCB_PENDING_OVERFLOW",
+                    $sformatf("%s pending depth=%0d limit=%0d",
+                              side, depth, m_cfg.m_pending_limit));
+        return 0;
+    end
+    return 1;
+endfunction
+
+function void common_uvm_scb::push_expected(TRANS_TYPE tr,
+                                            stream_id_t stream_id='1,
+                                            int kind=-1);
+    TRANS_TYPE retained;
+    state_t state;
+    state = state_for(stream_id);
+    m_expected_inputs++;
+    state.expected_inputs++;
+    if (!retained_copy(tr, stream_id, "expected", retained)) return;
+    if (!can_enqueue(state, stream_id, "expected", state.expected_q.size())) return;
+    state.expected_q.push_back(new(retained, kind));
+    update_peak(state);
+    case (m_cfg.m_cmp_mode)
+        SCB_ORDERED_EXACT: reconcile_ordered_exact(state);
+        SCB_ORDERED_LOSSY: reconcile_ordered_lossy(state);
+        SCB_UNORDERED:     reconcile_unordered_expected(state);
+    endcase
+endfunction
+
+function void common_uvm_scb::push_actual(TRANS_TYPE tr,
+                                          stream_id_t stream_id='1,
+                                          int kind=-1);
+    TRANS_TYPE retained;
+    state_t state;
+    state = state_for(stream_id);
+    m_actual_inputs++;
+    state.actual_inputs++;
+    if (m_cfg.m_strict_arrival && (state.expected_q.size() == 0)) begin
+        state.diagnostic_warnings++;
+        if (!m_strict_arrival_warned) begin
+            `uvm_warning("SCB_ACTUAL_FIRST",
+                         "actual input arrived before expected; comparison remains order-independent")
+            m_strict_arrival_warned = 1;
+        end
+    end
+    if (!retained_copy(tr, stream_id, "actual", retained)) return;
+    if (!can_enqueue(state, stream_id, "actual", state.actual_q.size())) return;
+    state.actual_q.push_back(new(retained, kind));
+    update_peak(state);
+    case (m_cfg.m_cmp_mode)
+        SCB_ORDERED_EXACT: reconcile_ordered_exact(state);
+        SCB_ORDERED_LOSSY: reconcile_ordered_lossy(state);
+        SCB_UNORDERED:     reconcile_unordered_actual(state);
+    endcase
+endfunction
+
+function void common_uvm_scb::update_peak(state_t state);
+    longint unsigned depth;
+    longint unsigned total_depth;
+    depth = state.expected_q.size() + state.actual_q.size();
+    total_depth = 0;
+    if (depth > state.peak_pending)
+        state.peak_pending = depth;
+    foreach (m_streams[id])
+        total_depth += m_streams[id].expected_q.size()
+                     + m_streams[id].actual_q.size();
+    if (total_depth > m_peak_pending)
+        m_peak_pending = total_depth;
+endfunction
+
+function bit common_uvm_scb::compare_items(TRANS_TYPE expected,
+                                           TRANS_TYPE actual,
+                                           int kind,
+                                           output string diff);
+    return expected.self_define_do_compare(actual, diff, kind);
+endfunction
+
+function void common_uvm_scb::reconcile_ordered_exact(state_t state);
+    pending_t expected;
+    pending_t actual;
+    string diff;
+    while ((state.expected_q.size() != 0) &&
+           (state.actual_q.size() != 0)) begin
+        expected = state.expected_q.pop_front();
+        actual = state.actual_q.pop_front();
+        if (compare_items(expected.tr, actual.tr, expected.kind, diff))
+            record_match(state, expected, actual, diff);
+        else
+            record_mismatch(state, expected, actual, diff);
+    end
+endfunction
+
+function void common_uvm_scb::reconcile_ordered_lossy(state_t state);
+    int match_index;
+    string diff;
+    while ((state.actual_q.size() != 0) &&
+           (state.expected_q.size() != 0)) begin
+        match_index = -1;
+        foreach (state.expected_q[i]) begin
+            if (compare_items(state.expected_q[i].tr,
+                              state.actual_q[0].tr,
+                              state.expected_q[i].kind,
+                              diff)) begin
+                match_index = i;
+                break;
+            end
+        end
+        if (match_index < 0) return;
+        repeat (match_index)
+            record_drop(state, state.expected_q.pop_front());
+        record_match(state, state.expected_q.pop_front(),
+                     state.actual_q.pop_front(), diff);
+    end
+endfunction
+
+function void common_uvm_scb::reconcile_unordered_expected(state_t state);
+    int match_index;
+    string diff;
+    pending_t expected;
+    match_index = -1;
+    expected = state.expected_q[state.expected_q.size()-1];
+    foreach (state.actual_q[i]) begin
+        if (compare_items(expected.tr, state.actual_q[i].tr,
+                          expected.kind, diff)) begin
+            match_index = i;
+            break;
+        end
+    end
+    if (match_index >= 0) begin
+        void'(state.expected_q.pop_back());
+        record_match(state, expected, state.actual_q[match_index], diff);
+        state.actual_q.delete(match_index);
+    end
+endfunction
+
+function void common_uvm_scb::reconcile_unordered_actual(state_t state);
+    int match_index;
+    string diff;
+    pending_t actual;
+    match_index = -1;
+    actual = state.actual_q[state.actual_q.size()-1];
+    foreach (state.expected_q[i]) begin
+        if (compare_items(state.expected_q[i].tr, actual.tr,
+                          state.expected_q[i].kind, diff)) begin
+            match_index = i;
+            break;
+        end
+    end
+    if (match_index >= 0) begin
+        void'(state.actual_q.pop_back());
+        record_match(state, state.expected_q[match_index], actual, diff);
+        state.expected_q.delete(match_index);
+    end
+endfunction
+
+function void common_uvm_scb::publish_result(state_t state,
+                                             pending_t expected,
+                                             pending_t actual,
+                                             bit matched,
+                                             string diff);
+    result_t result;
+    result = new("result");
+    result.stream_id = state.stream_id;
+    result.expected = (expected == null) ? null : expected.tr;
+    result.actual = (actual == null) ? null : actual.tr;
+    result.kind = (expected != null) ? expected.kind
+                                     : ((actual != null) ? actual.kind : -1);
+    result.matched = matched;
+    result.diff = diff;
+    m_result_ap.write(result);
+endfunction
+
+function void common_uvm_scb::record_match(state_t state,
+                                           pending_t expected,
+                                           pending_t actual,
+                                           string diff="");
+    state.matches++;
+    m_matches++;
+    publish_result(state, expected, actual, 1, diff);
+endfunction
+
+function void common_uvm_scb::record_mismatch(state_t state,
+                                              pending_t expected,
+                                              pending_t actual,
+                                              string diff);
+    state.mismatches++;
+    m_mismatches++;
+    publish_result(state, expected, actual, 0, diff);
+    emit_detail(state.stream_id, "SCB_MISMATCH", diff);
+endfunction
+
+function void common_uvm_scb::record_drop(state_t state,
+                                          pending_t expected);
+    state.allowed_drops++;
+    m_allowed_drops++;
+endfunction
+
+function void common_uvm_scb::record_unexpected(state_t state,
+                                                pending_t actual,
+                                                string reason);
+    state.unexpected_actuals++;
+    m_unexpected_actuals++;
+    publish_result(state, null, actual, 0, reason);
+    emit_detail(state.stream_id, "SCB_UNEXPECTED_ACTUAL", reason);
+endfunction
+
+function void common_uvm_scb::record_overflow(state_t state,
+                                              stream_id_t stream_id,
+                                              string side,
+                                              TRANS_TYPE tr,
+                                              int kind);
+    state.overflows++;
+    m_overflows++;
+endfunction
+
+function void common_uvm_scb::emit_detail(stream_id_t stream_id,
+                                          string id,
+                                          string message);
+    state_t state;
+    state = state_for(stream_id);
+    if (m_detail_emitted < m_cfg.m_err_limit) begin
+        m_detail_emitted++;
+        `uvm_error(id, $sformatf("stream=0x%0h %s", stream_id, message))
+    end else begin
+        m_suppressed_details++;
+        state.suppressed_details++;
+    end
+endfunction
+
+task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,
+                                          stream_id_t stream_id='1,
+                                          int kind=-1);
+    push_expected(rm_tr, stream_id, kind);
+endtask
+
+task common_uvm_scb::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,
+                                           stream_id_t stream_id='1,
+                                           int kind=-1);
+    push_actual(dut_tr, stream_id, kind);
+endtask
+
+`endif
