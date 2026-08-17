@@ -85,6 +85,7 @@ def test_reset_finishes_deasserted(tmp_path, platform_type):
         "harness.rst_n = 1'b0;",
         "i = $urandom_range(10, 20);",
         "repeat(i) @(posedge harness.clk);",
+        "@(negedge harness.clk);",
         "harness.rst_n = 1'b1;",
         "repeat(2) @(posedge harness.clk);",
         "phase.drop_objection(this);",
