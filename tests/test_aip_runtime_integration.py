@@ -71,8 +71,8 @@ def test_aip_activity_is_command_owned(tmp_path, platform_type):
     )
     environment = read(project_dir, "env/top_env.sv")
 
-    assert "send_trans" in base_sequence
-    assert "send_trans_with_rsp" in base_sequence
+    assert "virtual task send_trans" in base_sequence
+    assert "virtual task send_trans_with_rsp" in base_sequence
     assert base_sequence.count("aip_activity::tick();") == 2
     assert "aip_activity_subscriber" not in environment
     assert "m_axi_act_sub" not in environment
@@ -92,7 +92,7 @@ def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):
     tcl_demo = read(project_dir, "tc/tcl/tc_tcl_demo.tcl")
 
     assert "./simv -ucli -i ../tc/tcl/tc_tcl_demo.tcl" in tcl_demo
-    assert "end_test" in tcl_demo
+    assert "end_test idle=1us timeout=10us" in tcl_demo
 
 
 def test_non_aip_output_excludes_aip_integration(tmp_path, platform_type):
