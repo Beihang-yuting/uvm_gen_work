@@ -111,16 +111,12 @@ function void common_uvm_scb::build_phase(uvm_phase phase);
     if ($value$plusargs("SCB_REPORT_LIMIT=%d", value)) begin
         if (value >= -1)
             m_cfg.m_report_limit = value;
-        else begin
+        else
             `uvm_warning("SCB_CFG",
                          $sformatf("invalid SCB_REPORT_LIMIT=%0d; using 10", value))
-            m_cfg.m_report_limit = 10;
-        end
     end
-    if (m_cfg.m_report_limit < -1) begin
-        `uvm_warning("SCB_CFG", "m_report_limit must be -1 or greater; using 10")
+    if (m_cfg.m_report_limit < -1)
         m_cfg.m_report_limit = 10;
-    end
     if (m_cfg.m_err_limit < 0) begin
         `uvm_warning("SCB_CFG", "m_err_limit must be non-negative; using 10")
         m_cfg.m_err_limit = 10;

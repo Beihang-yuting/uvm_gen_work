@@ -202,6 +202,35 @@ def assert_core_contract(core_raw: str) -> None:
             ("pending-limit normalization", r"m_cfg\.m_pending_limit\s*<\s*0"),
         ],
     )
+    invalid_report_warning = (
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
+        r"\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*value\s*\)\s*\)"
+    )
+    assert len(re.findall(invalid_report_warning, build)) == 1, (
+        "invalid SCB_REPORT_LIMIT must emit exactly one approved warning"
+    )
+    assert not re.search(r"m_report_limit\s+must\b", build), (
+        "config-db report-limit normalization must be silent"
+    )
+    report_default_assignment = (
+        r"m_cfg\.m_report_limit\s*=\s*10\s*;"
+    )
+    assignments = list(re.finditer(report_default_assignment, build))
+    assert len(assignments) == 1, (
+        "build_phase must normalize m_report_limit to 10 exactly once"
+    )
+    report_normalization = re.search(
+        r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*"
+        r"m_cfg\.m_report_limit\s*=\s*10\s*;",
+        build,
+    )
+    assert report_normalization, (
+        "the sole report-limit default assignment must belong to the silent "
+        "post-plusarg normalization"
+    )
+    assert assignments[0].start() > report_normalization.start(), (
+        "report-limit default assignment must occur after its normalization guard"
+    )
 
     retained = core_method_body(
         core,
@@ -524,6 +553,21 @@ def test_standalone_core_template_implements_task5_comparison_contract():
         "bypassed global detail limit": (
             r"if \(m_detail_emitted < m_cfg.m_err_limit\) begin",
             "if (1) begin",
+        ),
+        "extra report warning and early assignment": (
+            r"(?s)else\s+(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+            r"\$sformatf\s*\(\s*\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*"
+            r"value\s*\)\s*\))\s*end\s*"
+            r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*"
+            r"m_cfg\.m_report_limit\s*=\s*10\s*;",
+            r"else begin\n            \g<warning>\n"
+            r"            m_cfg.m_report_limit = 10;\n"
+            r"        end\n    end\n"
+            r"    if (m_cfg.m_report_limit < -1) begin\n"
+            r"        `uvm_warning(\"SCB_CFG\", "
+            r"\"m_report_limit must be -1 or greater; using 10\")\n"
+            r"        m_cfg.m_report_limit = 10;\n"
+            r"    end",
         ),
     }
     for description, (pattern, replacement) in mutations.items():
