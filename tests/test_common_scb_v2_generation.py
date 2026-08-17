@@ -95,6 +95,16 @@ def test_legacy_and_v2_scoreboards_have_distinct_names(tmp_path, platform_type):
         r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+"
         r"common_scb_legacy_stream_manager\b"
     )
+    stale_enum = (
+        r"(?ms)^[ \t]*typedef[ \t]+enum\b[^;]*?\}\s*"
+        r"scb_cmp_mode\b\s*;"
+    )
+    stale_cfg_class = (
+        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+common_uvm_scb_cfg\b"
+    )
+    stale_manager_class = (
+        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+stream_trans_manager\b"
+    )
     v2_class = (
         r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+common_uvm_scb\b"
         r"[ \t\r\n]*#[ \t\r\n]*\("
@@ -116,6 +126,21 @@ def test_legacy_and_v2_scoreboards_have_distinct_names(tmp_path, platform_type):
     assert re.search(
         r"(?m)^[ \t]*`define[ \t]+COMMON_UVM_SCB_LEGACY__SV\b", legacy
     ), "missing legacy scoreboard `define guard"
+    assert not re.search(
+        stale_enum, legacy
+    ), "legacy source still declares stale enum scb_cmp_mode"
+    assert not re.search(
+        stale_cfg_class, legacy
+    ), "legacy source still declares stale class common_uvm_scb_cfg"
+    assert not re.search(
+        stale_manager_class, legacy
+    ), "legacy source still declares stale class stream_trans_manager"
+    assert not re.search(
+        r"(?m)^[ \t]*`ifndef[ \t]+COMMON_UVM_SCB__SV\b", legacy
+    ), "legacy source still contains stale `ifndef COMMON_UVM_SCB__SV guard"
+    assert not re.search(
+        r"(?m)^[ \t]*`define[ \t]+COMMON_UVM_SCB__SV\b", legacy
+    ), "legacy source still contains stale `define COMMON_UVM_SCB__SV guard"
     assert not re.search(
         v2_class, legacy
     ), "legacy source still declares the parameterized common_uvm_scb class"
