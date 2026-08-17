@@ -58,8 +58,14 @@ verify_success_log() {
 compile_and_run_base() {
     local project_dir=$1
     local label=$2
+    local aip_core_enabled=$3
     local compile_log="compile_${label}.log"
     local run_log="run_${label}_base.log"
+    local -a aip_compile_options=()
+
+    if [[ ${aip_core_enabled} == true ]]; then
+        aip_compile_options=(-debug_access+all -lca)
+    fi
 
     (
         cd "${project_dir}/cfg"
@@ -67,6 +73,7 @@ compile_and_run_base() {
         run_labeled compile "${label}" \
             timeout --kill-after=30s 600s \
             vcs -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+            "${aip_compile_options[@]}" \
             -f tb.f -top harness -o simv -l "${compile_log}"
 
         rm -f -- "${run_log}"
@@ -93,11 +100,11 @@ run_tcl() {
     )
 }
 
-compile_and_run_base "${advance_off}" advance_off
-compile_and_run_base "${advance_on}" advance_on
+compile_and_run_base "${advance_off}" advance_off false
+compile_and_run_base "${advance_on}" advance_on true
 run_tcl "${advance_on}" advance_on
-compile_and_run_base "${port_off}" port_off
-compile_and_run_base "${port_on}" port_on
+compile_and_run_base "${port_off}" port_off false
+compile_and_run_base "${port_on}" port_on true
 run_tcl "${port_on}" port_on
 
 echo 'AIP runtime matrix passed'

@@ -166,7 +166,25 @@ def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):
         "+UVM_TESTNAME=tc_tcl"
     ) in tcl_demo
     assert "-do" not in tcl_demo
-    assert "end_test idle=1us timeout=10us" in tcl_demo
+    assert_in_order(
+        tcl_demo,
+        "end_test idle=1us timeout=10us",
+        "\nrun\n",
+    )
+
+
+def test_vcs_runtime_gate_enables_ucli_visibility_for_aip_only():
+    runtime_gate = read(
+        Path(__file__).parent.parent, "tests/vcs/run_aip_runtime_smoke.sh"
+    )
+
+    assert "local aip_core_enabled=$3" in runtime_gate
+    assert 'if [[ ${aip_core_enabled} == true ]]; then' in runtime_gate
+    assert "aip_compile_options=(-debug_access+all -lca)" in runtime_gate
+    assert 'compile_and_run_base "${advance_off}" advance_off false' in runtime_gate
+    assert 'compile_and_run_base "${advance_on}" advance_on true' in runtime_gate
+    assert 'compile_and_run_base "${port_off}" port_off false' in runtime_gate
+    assert 'compile_and_run_base "${port_on}" port_on true' in runtime_gate
 
 
 def test_non_aip_output_excludes_aip_integration(tmp_path, platform_type):
