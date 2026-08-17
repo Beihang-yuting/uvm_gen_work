@@ -2,9 +2,13 @@
 `ifndef  AIP_ACTIVITY_SUBSCRIBER__SV
 `define  AIP_ACTIVITY_SUBSCRIBER__SV
 
-// Generic activity subscriber — connect to any analysis port
-// write() auto-calls aip_activity::tick() for idle detection
-// Usage in env: agent.m_mon.m_ap.connect(subscriber.analysis_export);
+// EXPLICIT OPT-IN activity subscriber — connect only when monitor-wide activity
+// is the intended progress signal. Unrelated transactions can mask a stuck AIP command.
+// Prefer aip_activity::tick() at the active command's real progress boundary.
+// Explicit usage:
+//   aip_activity_subscriber #(my_trans) activity_sub;
+//   activity_sub = new("activity_sub", this);
+//   agent.m_mon.m_ap.connect(activity_sub.analysis_export);
 
 class aip_activity_subscriber #(type T = uvm_sequence_item) extends uvm_subscriber #(T);
 

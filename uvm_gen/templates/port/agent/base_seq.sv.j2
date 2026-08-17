@@ -12,12 +12,40 @@ class {{ name }}_base_seq extends uvm_sequence #({{ name }}_trans);
         super.new(name);
     endfunction
 
+    // Fire & Forget: send transaction without waiting for response
+    virtual task send_trans(input {{ name }}_trans tr);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_MASTER, AGENT_ONLY_MASTER})) begin
+            `uvm_fatal(get_full_name, "send_trans only valid in MASTER/ONLY_MASTER mode")
+        end
+        start_item(tr);
+        finish_item(tr);
+{% if aip_core %}
+        aip_activity::tick();
+{% endif %}
+    endtask : send_trans
+
+    // Send & Wait Response: send transaction and wait for response
+    virtual task send_trans_with_rsp(input {{ name }}_trans tr, output {{ name }}_trans rsp);
+        if(!(p_sequencer.m_cfg.m_mode inside {AGENT_MASTER, AGENT_ONLY_MASTER})) begin
+            `uvm_fatal(get_full_name, "send_trans_with_rsp only valid in MASTER/ONLY_MASTER mode")
+        end
+        start_item(tr);
+        finish_item(tr);
+        get_response(rsp);
+{% if aip_core %}
+        aip_activity::tick();
+{% endif %}
+    endtask : send_trans_with_rsp
+
     // User writes body() with start_item/finish_item
 
 endclass
 {% if aip_core %}
 
 // --- aip_cmd_seq registration example ---
+// The helpers above tick only after a completed transaction. Custom long-running
+// sequences that bypass them must call aip_activity::tick() at a real progress
+// boundary, after item_done / a completed transfer.
 // Uncomment and modify to register sequences for TCL control:
 // `aip_cmd_seq({{ name }}_write, {{ name }}_wr_seq, {{ block_name }}_vsqr::s_{{ name }}_sqr)
 // `aip_cmd_seq({{ name }}_read,  {{ name }}_rd_seq, {{ block_name }}_vsqr::s_{{ name }}_sqr)

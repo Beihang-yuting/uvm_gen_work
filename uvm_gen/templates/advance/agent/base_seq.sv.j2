@@ -19,6 +19,9 @@ class {{ name }}_base_seq extends uvm_sequence #({{ name }}_trans);
         end
         start_item(tr);
         finish_item(tr);
+{% if aip_core %}
+        aip_activity::tick();
+{% endif %}
     endtask : send_trans
 
     // Send & Wait Response: send transaction and wait for response
@@ -29,6 +32,9 @@ class {{ name }}_base_seq extends uvm_sequence #({{ name }}_trans);
         start_item(tr);
         finish_item(tr);
         get_response(rsp);
+{% if aip_core %}
+        aip_activity::tick();
+{% endif %}
     endtask : send_trans_with_rsp
 
     // Monitor Only: wait for a monitored transaction
@@ -60,6 +66,9 @@ endclass
 {% if aip_core %}
 
 // --- aip_cmd_seq registration example ---
+// The helpers above tick only after a completed transaction. Custom long-running
+// sequences that bypass them must call aip_activity::tick() at a real progress
+// boundary, after item_done / a completed transfer.
 // Uncomment and modify to register sequences for TCL control:
 // `aip_cmd_seq({{ name }}_write, {{ name }}_wr_seq, {{ block_name }}_vsqr::s_{{ name }}_sqr)
 // `aip_cmd_seq({{ name }}_read,  {{ name }}_rd_seq, {{ block_name }}_vsqr::s_{{ name }}_sqr)
