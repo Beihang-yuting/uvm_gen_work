@@ -206,8 +206,31 @@ def assert_core_contract(core_raw: str) -> None:
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
         r"\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*value\s*\)\s*\)"
     )
-    assert len(re.findall(invalid_report_warning, build)) == 1, (
-        "invalid SCB_REPORT_LIMIT must emit exactly one approved warning"
+    error_limit_warning = (
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+        r"\"m_err_limit must be non-negative; using 10\"\s*\)"
+    )
+    pending_limit_warning = (
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+        r"\"m_pending_limit must be non-negative; using 0\"\s*\)"
+    )
+    approved_warnings = [
+        ("invalid report plusarg", invalid_report_warning),
+        ("error-limit normalization", error_limit_warning),
+        ("pending-limit normalization", pending_limit_warning),
+    ]
+    warning_positions = []
+    for description, pattern in approved_warnings:
+        matches = list(re.finditer(pattern, build))
+        assert len(matches) == 1, (
+            f"build_phase must contain exactly one approved {description} warning"
+        )
+        warning_positions.append(matches[0].start())
+    all_warning_positions = [
+        match.start() for match in re.finditer(r"`uvm_warning\s*\(", build)
+    ]
+    assert all_warning_positions == warning_positions, (
+        "build_phase must contain only the three approved warnings in order"
     )
     assert not re.search(r"m_report_limit\s+must\b", build), (
         "config-db report-limit normalization must be silent"
@@ -568,6 +591,21 @@ def test_standalone_core_template_implements_task5_comparison_contract():
             r"\"m_report_limit must be -1 or greater; using 10\")\n"
             r"        m_cfg.m_report_limit = 10;\n"
             r"    end",
+        ),
+        "differently worded report warning": (
+            r"if \(m_cfg.m_report_limit < -1\)",
+            r"`uvm_warning(\"SCB_CFG\", \"configured report limit invalid\")\n"
+            r"    if (m_cfg.m_report_limit < -1)",
+        ),
+        "missing error-limit warning": (
+            r"`uvm_warning\(\"SCB_CFG\", "
+            r"\"m_err_limit must be non-negative; using 10\"\)",
+            "",
+        ),
+        "missing pending-limit warning": (
+            r"`uvm_warning\(\"SCB_CFG\", "
+            r"\"m_pending_limit must be non-negative; using 0\"\)",
+            "",
         ),
     }
     for description, (pattern, replacement) in mutations.items():
