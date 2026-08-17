@@ -1,6 +1,6 @@
 {{ header(file_name) }}
-`ifndef  COMMON_UVM_SCB__SV
-`define  COMMON_UVM_SCB__SV
+`ifndef  COMMON_UVM_SCB_LEGACY__SV
+`define  COMMON_UVM_SCB_LEGACY__SV
 
 
 class new_scb_demo_trans extends uvm_object;
@@ -15,18 +15,18 @@ class new_scb_demo_trans extends uvm_object;
 endclass
 
 
-typedef enum {ORDER_CMP_WITHOUT_LOSS,ORDER_CMP_WITH_LOSS,DISORDER_CMP} scb_cmp_mode;
+typedef enum {ORDER_CMP_WITHOUT_LOSS,ORDER_CMP_WITH_LOSS,DISORDER_CMP} legacy_scb_cmp_mode_e;
 
-class common_uvm_scb_cfg extends uvm_object;
-    scb_cmp_mode          m_cmp_mode;
+class common_uvm_scb_legacy_cfg extends uvm_object;
+    legacy_scb_cmp_mode_e          m_cmp_mode;
     bit                   m_allow_dut_faster_en;
     int                   m_err_print_threshold;
     int                   m_cmp_pass_print_interval;
     bit                   m_report_info_en;
     bit                   m_report_stream_en;
 
-    `uvm_object_utils_begin(common_uvm_scb_cfg)
-        `uvm_field_enum(scb_cmp_mode,m_cmp_mode,UVM_ALL_ON)
+    `uvm_object_utils_begin(common_uvm_scb_legacy_cfg)
+        `uvm_field_enum(legacy_scb_cmp_mode_e,m_cmp_mode,UVM_ALL_ON)
         `uvm_field_int(m_allow_dut_faster_en,UVM_ALL_ON)
         `uvm_field_int(m_err_print_threshold,UVM_ALL_ON)
         `uvm_field_int(m_cmp_pass_print_interval,UVM_ALL_ON)
@@ -34,7 +34,7 @@ class common_uvm_scb_cfg extends uvm_object;
         `uvm_field_int(m_report_stream_en,UVM_ALL_ON)
     `uvm_object_utils_end
 
-    function new (string name = "common_uvm_scb_cfg");
+    function new (string name = "common_uvm_scb_legacy_cfg");
         super.new(name);
         this.m_cmp_mode                = DISORDER_CMP;
         this.m_allow_dut_faster_en     = 0;
@@ -46,8 +46,8 @@ class common_uvm_scb_cfg extends uvm_object;
 
 endclass
 
-class stream_trans_manager#(parameter type TRANS_TYPE = new_scb_demo_trans,parameter stream_id_len=32) extends uvm_object;
-    `uvm_object_param_utils(stream_trans_manager#(TRANS_TYPE,stream_id_len))
+class common_scb_legacy_stream_manager#(parameter type TRANS_TYPE = new_scb_demo_trans,parameter stream_id_len=32) extends uvm_object;
+    `uvm_object_param_utils(common_scb_legacy_stream_manager#(TRANS_TYPE,stream_id_len))
     bit[stream_id_len-1:0]        m_stream_id;
     TRANS_TYPE                    m_rm_trans_q[$];
     TRANS_TYPE                    m_dut_trans_q[$];
@@ -59,7 +59,7 @@ class stream_trans_manager#(parameter type TRANS_TYPE = new_scb_demo_trans,param
     int                           m_match_pair_cnt;
     int                           m_print_err_cnt;
 
-    function new (string name = "stream_trans_manager");
+    function new (string name = "common_scb_legacy_stream_manager");
         super.new(name);
         this.m_get_rm_trans_cnt       = 0;
         this.m_get_dut_trans_cnt      = 0;
@@ -91,20 +91,20 @@ class stream_trans_manager#(parameter type TRANS_TYPE = new_scb_demo_trans,param
 
 endclass
 
-class common_uvm_scb#(parameter type TRANS_TYPE = new_scb_demo_trans,parameter stream_id_len=32) extends uvm_component;
-    common_uvm_scb_cfg    m_cfg;
+class common_uvm_scb_legacy#(parameter type TRANS_TYPE = new_scb_demo_trans,parameter stream_id_len=32) extends uvm_component;
+    common_uvm_scb_legacy_cfg    m_cfg;
     int                   m_total_match_pair_cnt;
     int                   m_get_rm_trans_cnt;
     int                   m_get_dut_trans_cnt;
     int                   m_total_suppressed_err_cnt;
-    stream_trans_manager#(TRANS_TYPE,stream_id_len)   m_trans_array[bit[stream_id_len-1:0]];
+    common_scb_legacy_stream_manager#(TRANS_TYPE,stream_id_len)   m_trans_array[bit[stream_id_len-1:0]];
 
-    `uvm_component_param_utils_begin(common_uvm_scb#(TRANS_TYPE,stream_id_len))
+    `uvm_component_param_utils_begin(common_uvm_scb_legacy#(TRANS_TYPE,stream_id_len))
         `uvm_field_object(m_cfg,UVM_ALL_ON)
         `uvm_field_int   (m_total_match_pair_cnt,UVM_ALL_ON)
     `uvm_component_utils_end
 
-    extern function new(string name="common_uvm_scb",uvm_component parent = null);
+    extern function new(string name="common_uvm_scb_legacy",uvm_component parent = null);
     extern virtual task send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
     extern virtual task cmp_order_with_loss_rm_trans(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
 
@@ -129,7 +129,7 @@ class common_uvm_scb#(parameter type TRANS_TYPE = new_scb_demo_trans,parameter s
 
 endclass
 
-function common_uvm_scb::new(string name="common_uvm_scb",uvm_component parent=null);
+function common_uvm_scb_legacy::new(string name="common_uvm_scb_legacy",uvm_component parent=null);
     super.new(name,parent);
     this.m_cfg = new();
     this.m_total_match_pair_cnt = 0;
@@ -138,7 +138,7 @@ function common_uvm_scb::new(string name="common_uvm_scb",uvm_component parent=n
     this.m_total_suppressed_err_cnt = 0;
 endfunction:new
 
-task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
     int i,j,k;
     TRANS_TYPE dut_tr;
     TRANS_TYPE tmp_tr;
@@ -209,7 +209,7 @@ task common_uvm_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,bit[stream_id_len-1:0
     end
 endtask
 
-task common_uvm_scb::cmp_order_with_loss_rm_trans(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::cmp_order_with_loss_rm_trans(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
     int i,j,k;
     TRANS_TYPE dut_tr;
     TRANS_TYPE tmp_tr;
@@ -272,7 +272,7 @@ task common_uvm_scb::cmp_order_with_loss_rm_trans(TRANS_TYPE rm_tr,bit[stream_id
     end
 endtask
 
-task common_uvm_scb::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
     int i,j,k;
     TRANS_TYPE rm_tr;
     TRANS_TYPE tmp_tr;
@@ -351,7 +351,7 @@ task common_uvm_scb::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,bit[stream_id_len-1
     end
 endtask
 
-task common_uvm_scb::cmp_order_with_loss_dut_trans(TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::cmp_order_with_loss_dut_trans(TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
     int i,j,k;
     TRANS_TYPE rm_tr;
     TRANS_TYPE tmp_tr;
@@ -444,12 +444,12 @@ task common_uvm_scb::cmp_order_with_loss_dut_trans(TRANS_TYPE dut_tr,bit[stream_
     end
 endtask
 
-function bit common_uvm_scb::quick_compare(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,int kind=-1);
+function bit common_uvm_scb_legacy::quick_compare(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,int kind=-1);
     string diff;
     return rm_tr.self_define_do_compare(dut_tr,diff,kind);
 endfunction
 
-task common_uvm_scb::cmp_pass_action(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::cmp_pass_action(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
     this.m_trans_array[stream_id].m_match_pair_cnt++;
     this.m_total_match_pair_cnt++;
     if(this.m_total_match_pair_cnt%m_cfg.m_cmp_pass_print_interval==0) begin
@@ -458,10 +458,10 @@ task common_uvm_scb::cmp_pass_action(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,bit[stre
     this.action_when_cmp_pass(rm_tr,dut_tr,stream_id,kind);
 endtask
 
-task common_uvm_scb::action_when_cmp_pass(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::action_when_cmp_pass(TRANS_TYPE rm_tr,TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
 endtask
 
-task common_uvm_scb::cmp_not_pass_action(bit[stream_id_len-1:0] stream_id,string diff);
+task common_uvm_scb_legacy::cmp_not_pass_action(bit[stream_id_len-1:0] stream_id,string diff);
     if(this.m_trans_array[stream_id].m_print_err_cnt<this.m_cfg.m_err_print_threshold) begin
         this.m_trans_array[stream_id].m_print_err_cnt++;
         `uvm_error(get_full_name,"scb cmp not pass");
@@ -472,7 +472,7 @@ task common_uvm_scb::cmp_not_pass_action(bit[stream_id_len-1:0] stream_id,string
     end
 endtask
 
-function void common_uvm_scb::report_info();
+function void common_uvm_scb_legacy::report_info();
     int i,j,k;
     int total_rm_trans_q_size             ;
     int total_dut_trans_q_size            ;
@@ -511,7 +511,7 @@ function void common_uvm_scb::report_info();
     draw_inst.clean_table_content();
 endfunction
 
-function void common_uvm_scb::queue_status_chk();
+function void common_uvm_scb_legacy::queue_status_chk();
     int i,j,k;
     int dut_cnt,rm_cnt,dut_find_not_match_cnt,not_match_pair_cnt;
     int total_cnt,total_except_dut_drop_cnt;
@@ -540,7 +540,7 @@ function void common_uvm_scb::queue_status_chk();
     end
 endfunction
 
-function void common_uvm_scb::report_phase(uvm_phase phase);
+function void common_uvm_scb_legacy::report_phase(uvm_phase phase);
     super.report_phase(phase);
     if(this.m_cfg.m_report_info_en == 1) begin
         this.report_info();
@@ -554,7 +554,7 @@ function void common_uvm_scb::report_phase(uvm_phase phase);
     this.queue_status_chk();
 endfunction
 
-function void common_uvm_scb::clear_all_q();
+function void common_uvm_scb_legacy::clear_all_q();
     foreach(this.m_trans_array[i]) begin
         this.m_trans_array[i].m_dut_trans_q.delete();
         this.m_trans_array[i].m_rm_trans_q.delete();
@@ -562,7 +562,7 @@ function void common_uvm_scb::clear_all_q();
     end
 endfunction
 
-function void common_uvm_scb::clear_all_cnt();
+function void common_uvm_scb_legacy::clear_all_cnt();
     foreach(this.m_trans_array[i]) begin
         this.m_trans_array[i].m_get_rm_trans_cnt        =0;
         this.m_trans_array[i].m_get_dut_trans_cnt       =0;
@@ -576,18 +576,18 @@ function void common_uvm_scb::clear_all_cnt();
     this.m_get_dut_trans_cnt    =0;
 endfunction
 
-function void common_uvm_scb::clear_all();
+function void common_uvm_scb_legacy::clear_all();
     this.clear_all_q();
     this.clear_all_cnt();
 endfunction
 
-task common_uvm_scb::action_when_get_rm_trans(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
+task common_uvm_scb_legacy::action_when_get_rm_trans(TRANS_TYPE rm_tr,bit[stream_id_len-1:0] stream_id=-1, int kind=-1);
 endtask
 
-task common_uvm_scb::action_when_get_dut_trans(TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1,int kind=-1);
+task common_uvm_scb_legacy::action_when_get_dut_trans(TRANS_TYPE dut_tr,bit[stream_id_len-1:0] stream_id=-1,int kind=-1);
 endtask
 
-function string common_uvm_scb::gen_report_info(bit report_in_env=0);
+function string common_uvm_scb_legacy::gen_report_info(bit report_in_env=0);
     int total_rm_trans_q_size             ;
     int total_dut_trans_q_size            ;
     int total_dut_find_not_match_q_size   ;
