@@ -88,6 +88,369 @@ def assert_positions_in_order(body: str, checks) -> None:
     )
 
 
+def assert_task6_lifecycle_report_contract(core: str) -> None:
+    declarations = {
+        "control proxy member": (
+            r"(?m)^[ \t]*protected\s+common_scb_control_proxy\s+m_proxy\s*;"
+        ),
+        "row ordering helper": (
+            r"(?m)^[ \t]*protected\s+extern\s+function\s+bit\s+row_before\s*\("
+            r"\s*common_scb_problem_row\s+left\s*,\s*"
+            r"common_scb_problem_row\s+right\s*\)\s*;"
+        ),
+        "row builder helper": (
+            r"(?m)^[ \t]*protected\s+extern\s+function\s+common_scb_problem_row\s+"
+            r"make_row\s*\(\s*state_t\s+state\s*\)\s*;"
+        ),
+    }
+    for description, pattern in declarations.items():
+        assert re.search(pattern, core), f"missing Task 6 {description}"
+
+    row_before = core_method_body(
+        core,
+        r"function\s+bit\s+common_uvm_scb::row_before\s*\([^;]+\)",
+        "row_before",
+    )
+    assert_positions_in_order(
+        row_before,
+        [
+            (
+                "severity ordering",
+                r"if\s*\(\s*left\.status\s*!=\s*right\.status\s*\)\s*"
+                r"return\s+left\.status\s*>\s*right\.status\s*;",
+            ),
+            (
+                "issue-count ordering",
+                r"if\s*\(\s*left\.issue_count\s*!=\s*right\.issue_count\s*\)\s*"
+                r"return\s+left\.issue_count\s*>\s*right\.issue_count\s*;",
+            ),
+            (
+                "stream-ID tie break",
+                r"return\s+left\.stream_id\s*<\s*right\.stream_id\s*;",
+            ),
+        ],
+    )
+
+    make_row = core_method_body(
+        core,
+        r"function\s+common_scb_problem_row\s+common_uvm_scb::make_row\s*\([^;]+\)",
+        "make_row",
+    )
+    assert_positions_in_order(
+        make_row,
+        [
+            ("row allocation", r"row\s*=\s*new\s*\(\s*\)\s*;"),
+            (
+                "pending expected calculation",
+                r"pending_expected\s*=\s*state\.expected_q\.size\s*\(\s*\)\s*;",
+            ),
+            (
+                "pending actual calculation",
+                r"pending_actual\s*=\s*state\.actual_q\.size\s*\(\s*\)\s*;",
+            ),
+            (
+                "failure classification",
+                r"state\.mismatches\s*\+\s*state\.unexpected_actuals\s*\+\s*"
+                r"state\.overflows.*?row\.status\s*=\s*SCB_FAIL\s*;",
+            ),
+            (
+                "warning classification",
+                r"state\.allowed_drops\s*\+\s*state\.diagnostic_warnings\s*\+\s*"
+                r"pending_expected\s*\+\s*pending_actual.*?row\.status\s*=\s*SCB_WARN\s*;",
+            ),
+            ("pass classification", r"else\s*row\.status\s*=\s*SCB_PASS\s*;"),
+            ("issue count", r"row\.issue_count\s*=\s*state\.issue_count\s*\(\s*\)\s*;"),
+            (
+                "ten report cells",
+                r"row\.cells\s*=\s*'\{\s*row\.status\.name\s*\(\s*\)\s*,\s*"
+                r"\$sformatf\s*\(\s*\"0x%0h\"\s*,\s*state\.stream_id\s*\)\s*,"
+                r".*?state\.matches.*?state\.mismatches.*?state\.allowed_drops.*?"
+                r"state\.unexpected_actuals.*?pending_expected.*?pending_actual.*?"
+                r"state\.overflows.*?state\.peak_pending.*?\}\s*;",
+            ),
+        ],
+    )
+
+    status = core_method_body(
+        core,
+        r"function\s+scb_status_e\s+common_uvm_scb::get_status\s*\(\s*\)",
+        "get_status",
+    )
+    assert_positions_in_order(
+        status,
+        [
+            ("diagnostic accumulator", r"longint\s+unsigned\s+diagnostics\s*=\s*0\s*;"),
+            (
+                "diagnostic sum",
+                r"foreach\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)\s*"
+                r"diagnostics\s*\+=\s*m_streams\s*\[\s*id\s*\]\.diagnostic_warnings\s*;",
+            ),
+            (
+                "global failure",
+                r"m_mismatches\s*\+\s*m_unexpected_actuals\s*\+\s*m_overflows.*?"
+                r"return\s+SCB_FAIL\s*;",
+            ),
+            (
+                "global warning",
+                r"m_allowed_drops\s*\+\s*diagnostics.*?return\s+SCB_WARN\s*;",
+            ),
+            ("global pass", r"return\s+SCB_PASS\s*;"),
+        ],
+    )
+
+    clean = core_method_body(
+        core,
+        r"function\s+bit\s+common_uvm_scb::is_clean\s*\(\s*\)",
+        "is_clean",
+    )
+    assert_positions_in_order(
+        clean,
+        [
+            (
+                "pending queue rejection",
+                r"foreach\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\).*?"
+                r"expected_q\.size\s*\(\s*\).*?actual_q\.size\s*\(\s*\).*?return\s+0\s*;",
+            ),
+            ("status check", r"return\s+get_status\s*\(\s*\)\s*==\s*SCB_PASS\s*;"),
+        ],
+    )
+
+    summary = core_method_body(
+        core,
+        r"function\s+string\s+common_uvm_scb::get_summary\s*\(\s*\)",
+        "get_summary",
+    )
+    assert re.search(
+        r"pending_expected\s*\+=\s*m_streams\s*\[\s*id\s*\]\.expected_q\.size\s*\(\s*\)\s*;",
+        summary,
+    )
+    assert re.search(
+        r"pending_actual\s*\+=\s*m_streams\s*\[\s*id\s*\]\.actual_q\.size\s*\(\s*\)\s*;",
+        summary,
+    )
+    assert (
+        '"status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "' in summary
+        and '"drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d "' in summary
+        and '"overflow=%0d peak_pending=%0d suppressed=%0d"' in summary
+    ), "get_summary must use the exact Task 6 aggregate format"
+
+    report = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::print_report\s*\(\s*int\s+limit\s*=\s*-2\s*\)",
+        "print_report",
+    )
+    assert re.search(
+        r"string\s+headers\s*\[\$\]\s*=\s*'\{\s*\"Status\"\s*,\s*\"Stream\"\s*,\s*"
+        r"\"Match\"\s*,\s*\"Mismatch\"\s*,\s*\"Drop\"\s*,\s*\"Unexpected\"\s*,\s*"
+        r"\"PendExp\"\s*,\s*\"PendAct\"\s*,\s*\"Overflow\"\s*,\s*\"Peak\"\s*\}\s*;",
+        report,
+    ), "print_report must define the exact ten headers"
+    assert re.search(
+        r"bit\s+numeric\s*\[\$\]\s*=\s*'\{\s*0\s*,\s*0\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*\}\s*;",
+        report,
+    ), "print_report must define exact numeric-column metadata"
+    assert_positions_in_order(
+        report,
+        [
+            (
+                "configured limit selection",
+                r"effective_limit\s*=\s*\(\s*limit\s*==\s*-2\s*\)\s*\?\s*"
+                r"m_cfg\.m_report_limit\s*:\s*limit\s*;",
+            ),
+            (
+                "invalid limit fallback",
+                r"if\s*\(\s*effective_limit\s*<\s*-1\s*\).*?"
+                r"invalid report limit=%0d; using configured limit=%0d.*?"
+                r"effective_limit\s*=\s*m_cfg\.m_report_limit\s*;",
+            ),
+            (
+                "problem-row filter",
+                r"row\s*=\s*make_row\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)\s*;\s*"
+                r"if\s*\(\s*row\.issue_count\s*!=\s*0\s*\)",
+            ),
+            (
+                "stable insertion point",
+                r"int\s+insert_at\s*=\s*rows\.size\s*\(\s*\)\s*;.*?"
+                r"if\s*\(\s*row_before\s*\(\s*row\s*,\s*rows\s*\[\s*i\s*\]\s*\)\s*\).*?"
+                r"insert_at\s*=\s*i\s*;.*?break\s*;.*?rows\.insert\s*\(\s*insert_at\s*,\s*row\s*\)\s*;",
+            ),
+            (
+                "all-or-top-N shown count",
+                r"shown\s*=\s*\(\s*effective_limit\s*==\s*-1\s*\)\s*\?\s*rows\.size\s*\(\s*\)\s*"
+                r":\s*\(\s*\(\s*effective_limit\s*<\s*rows\.size\s*\(\s*\)\s*\)\s*\?\s*"
+                r"effective_limit\s*:\s*rows\.size\s*\(\s*\)\s*\)\s*;",
+            ),
+            ("omitted count", r"omitted\s*=\s*rows\.size\s*\(\s*\)\s*-\s*shown\s*;"),
+            ("summary info", r"`uvm_info\s*\(\s*\"SCB_REPORT\"\s*,\s*get_summary\s*\(\s*\)"),
+            (
+                "problem-count info",
+                r"Problem streams: total=%0d shown=%0d omitted=%0d",
+            ),
+            (
+                "conditional table",
+                r"if\s*\(\s*shown\s*!=\s*0\s*\)\s*begin\s*"
+                r"reporter\.set_columns\s*\(\s*headers\s*,\s*numeric\s*\)\s*;.*?"
+                r"for\s*\(\s*int\s+i\s*=\s*0\s*;\s*i\s*<\s*shown\s*;\s*i\+\+\s*\)\s*"
+                r"reporter\.add_row\s*\(\s*rows\s*\[\s*i\s*\]\.cells\s*\)\s*;.*?"
+                r"reporter\.render\s*\(\s*\)",
+            ),
+        ],
+    )
+    assert "normal streams" not in report.lower()
+
+    finalize = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::finalize_pending\s*\(\s*\)",
+        "finalize_pending",
+    )
+    assert_positions_in_order(
+        finalize,
+        [
+            ("idempotence guard", r"if\s*\(\s*m_finalized\s*\)\s*return\s*;"),
+            ("stream loop", r"foreach\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)"),
+            (
+                "lossy residual drops",
+                r"if\s*\(\s*m_cfg\.m_cmp_mode\s*==\s*SCB_ORDERED_LOSSY\s*\).*?"
+                r"while\s*\(\s*state\.expected_q\.size\s*\(\s*\)\s*!=\s*0\s*\)\s*"
+                r"record_drop\s*\(\s*state\s*,\s*state\.expected_q\.pop_front\s*\(\s*\)\s*\)\s*;",
+            ),
+            (
+                "non-lossy residual mismatches",
+                r"else\s*begin\s*while\s*\(\s*state\.expected_q\.size\s*\(\s*\)\s*!=\s*0\s*\)\s*"
+                r"record_mismatch\s*\(\s*state\s*,\s*state\.expected_q\.pop_front\s*\(\s*\)\s*,\s*null\s*,\s*"
+                r"\"expected transaction has no actual match at check phase\"\s*\)\s*;\s*end",
+            ),
+            (
+                "actual residual unexpected classification",
+                r"while\s*\(\s*state\.actual_q\.size\s*\(\s*\)\s*!=\s*0\s*\)\s*"
+                r"record_unexpected\s*\(\s*state\s*,\s*state\.actual_q\.pop_front\s*\(\s*\)\s*,\s*"
+                r"\"actual transaction has no expected match at check phase\"\s*\)\s*;",
+            ),
+            ("finalized marker", r"m_finalized\s*=\s*1\s*;"),
+        ],
+    )
+
+    check = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::check_phase\s*\(\s*uvm_phase\s+phase\s*\)",
+        "check_phase",
+    )
+    assert_positions_in_order(
+        check,
+        [
+            ("parent check", r"super\.check_phase\s*\(\s*phase\s*\)\s*;"),
+            ("pending finalization", r"finalize_pending\s*\(\s*\)\s*;"),
+            ("final status case", r"case\s*\(\s*get_status\s*\(\s*\)\s*\)"),
+            ("failure message", r"SCB_FAIL\s*:\s*`uvm_error\s*\(\s*\"SCB_FINAL\"\s*,\s*get_summary\s*\(\s*\)\s*\)"),
+            ("warning message", r"SCB_WARN\s*:\s*`uvm_warning\s*\(\s*\"SCB_FINAL\"\s*,\s*get_summary\s*\(\s*\)\s*\)"),
+            ("pass message", r"default\s*:\s*`uvm_info\s*\(\s*\"SCB_FINAL\"\s*,\s*get_summary\s*\(\s*\)\s*,\s*UVM_LOW\s*\)"),
+        ],
+    )
+
+    report_phase = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::report_phase\s*\(\s*uvm_phase\s+phase\s*\)",
+        "report_phase",
+    )
+    assert_positions_in_order(
+        report_phase,
+        [
+            ("parent report", r"super\.report_phase\s*\(\s*phase\s*\)\s*;"),
+            ("enabled report", r"if\s*\(\s*m_cfg\.m_report_en\s*\)\s*print_report\s*\(\s*\)\s*;"),
+            (
+                "suppression warning",
+                r"if\s*\(\s*m_suppressed_details\s*!=\s*0\s*\).*?"
+                r"%0d runtime detail messages suppressed \(limit=%0d\).*?"
+                r"m_suppressed_details\s*,\s*m_cfg\.m_err_limit",
+            ),
+        ],
+    )
+    assert "record_mismatch" not in report_phase
+    assert "record_unexpected" not in report_phase
+
+    reset = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::reset_state\s*\(\s*bit\s+clear_counters\s*=\s*1\s*\)",
+        "reset_state",
+    )
+    assert_positions_in_order(
+        reset,
+        [
+            ("stream deletion", r"m_streams\.delete\s*\(\s*\)\s*;"),
+            ("finalized reset", r"m_finalized\s*=\s*0\s*;"),
+            ("strict warning reset", r"m_strict_arrival_warned\s*=\s*0\s*;"),
+            ("unconditional current gauge reset", r"m_current_pending\s*=\s*0\s*;"),
+            ("cumulative counter guard", r"if\s*\(\s*clear_counters\s*\)\s*begin"),
+            ("expected reset", r"m_expected_inputs\s*=\s*0\s*;"),
+            ("actual reset", r"m_actual_inputs\s*=\s*0\s*;"),
+            ("matches reset", r"m_matches\s*=\s*0\s*;"),
+            ("mismatches reset", r"m_mismatches\s*=\s*0\s*;"),
+            ("drops reset", r"m_allowed_drops\s*=\s*0\s*;"),
+            ("unexpected reset", r"m_unexpected_actuals\s*=\s*0\s*;"),
+            ("overflows reset", r"m_overflows\s*=\s*0\s*;"),
+            ("peak reset", r"m_peak_pending\s*=\s*0\s*;"),
+            ("detail reset", r"m_detail_emitted\s*=\s*0\s*;"),
+            ("suppressed reset", r"m_suppressed_details\s*=\s*0\s*;"),
+        ],
+    )
+    current_reset = re.search(r"m_current_pending\s*=\s*0\s*;", reset)
+    clear_guard = re.search(r"if\s*\(\s*clear_counters\s*\)\s*begin", reset)
+    assert current_reset and clear_guard and current_reset.start() < clear_guard.start(), (
+        "reset_state must clear the current gauge even when cumulative counters are retained"
+    )
+
+
+def assert_task6_proxy_contract(core: str) -> None:
+    core_class_end = core.index("endclass", core.index("class common_uvm_scb"))
+    first_core_body = core.index("function common_uvm_scb::new")
+    proxy_match = re.search(
+        r"(?ms)class\s+common_scb_typed_proxy\s*#\s*\(\s*type\s+TRANS_TYPE\s*,\s*"
+        r"int\s+STREAM_ID_WIDTH\s*=\s*64\s*\)\s*extends\s+common_scb_control_proxy\s*;"
+        r"(?P<body>.*?)^[ \t]*endclass",
+        core,
+    )
+    assert proxy_match, "missing explicit-type Task 6 typed proxy"
+    assert core_class_end < proxy_match.start() < first_core_body, (
+        "typed proxy must follow the core declaration and precede method bodies"
+    )
+    proxy = proxy_match.group("body")
+    assert re.search(
+        r"typedef\s+common_uvm_scb\s*#\s*\(\s*TRANS_TYPE\s*,\s*STREAM_ID_WIDTH\s*\)\s+scoreboard_t\s*;",
+        proxy,
+    )
+    assert re.search(r"protected\s+scoreboard_t\s+m_scoreboard\s*;", proxy)
+    expected_proxy_bodies = {
+        "constructor": r"function\s+new\s*\(\s*string\s+name\s*,\s*scoreboard_t\s+scoreboard\s*\).*?super\.new\s*\(\s*name\s*\).*?m_scoreboard\s*=\s*scoreboard",
+        "scoreboard name": r"function\s+string\s+scoreboard_name\s*\(\s*\).*?return\s+m_scoreboard\.get_full_name\s*\(\s*\)",
+        "status": r"function\s+scb_status_e\s+status\s*\(\s*\).*?return\s+m_scoreboard\.get_status\s*\(\s*\)",
+        "summary": r"function\s+string\s+summary\s*\(\s*\).*?return\s+m_scoreboard\.get_summary\s*\(\s*\)",
+        "report": r"function\s+void\s+report\s*\(\s*int\s+limit\s*=\s*-2\s*\).*?m_scoreboard\.print_report\s*\(\s*limit\s*\)",
+        "limit validation": r"function\s+bit\s+set_report_limit\s*\(\s*int\s+limit\s*,\s*output\s+string\s+error\s*\).*?if\s*\(\s*limit\s*<\s*-1\s*\).*?report limit must be -1 or non-negative, got %0d.*?return\s+0\s*;.*?m_scoreboard\.m_cfg\.m_report_limit\s*=\s*limit\s*;.*?error\s*=\s*\"\"\s*;.*?return\s+1\s*;",
+    }
+    for description, pattern in expected_proxy_bodies.items():
+        assert re.search(pattern, proxy, flags=re.DOTALL), (
+            f"typed proxy has incorrect {description} body"
+        )
+    assert not re.search(r"type\s+TRANS_TYPE\s*=", proxy_match.group(0))
+
+    build = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::build_phase\s*\(\s*uvm_phase\s+phase\s*\)",
+        "build_phase",
+    )
+    registration = re.search(
+        r"(?ms)begin\s*common_scb_typed_proxy\s*#\s*\(\s*TRANS_TYPE\s*,\s*STREAM_ID_WIDTH\s*\)\s+typed_proxy\s*;\s*"
+        r"string\s+registry_error\s*;\s*"
+        r"typed_proxy\s*=\s*new\s*\(\s*\{\s*get_name\s*\(\s*\)\s*,\s*\"_proxy\"\s*\}\s*,\s*this\s*\)\s*;\s*"
+        r"m_proxy\s*=\s*typed_proxy\s*;\s*"
+        r"if\s*\(\s*!\s*common_scb_registry::register_proxy\s*\(\s*m_proxy\s*,\s*registry_error\s*\)\s*\)\s*"
+        r"`uvm_error\s*\(\s*\"SCB_REGISTRY\"\s*,\s*registry_error\s*\)\s*end\s*$",
+        build,
+    )
+    assert registration, "build_phase must register the typed proxy at its end"
+    assert not re.search(r"\baip_|AIP_", proxy_match.group(0))
+
+
 def assert_core_contract(core_raw: str) -> None:
     core = strip_sv_comments(core_raw)
 
@@ -692,20 +1055,8 @@ def assert_core_contract(core_raw: str) -> None:
         actual_wrapper,
     ), "legacy DUT wrapper must call push_actual"
 
-    for task_six_method in (
-        "get_status",
-        "is_clean",
-        "get_summary",
-        "print_report",
-        "reset_state",
-        "check_phase",
-        "report_phase",
-        "finalize_pending",
-    ):
-        assert not re.search(
-            rf"(?m)^[ \t]*function\b[^;\n]*common_uvm_scb::{task_six_method}\b",
-            core,
-        ), f"Task 5 must not define Task 6 method {task_six_method}"
+    assert_task6_lifecycle_report_contract(core)
+    assert_task6_proxy_contract(core)
 
     assert not re.search(r"\baip_|AIP_", core_raw), (
         "raw core template must remain AIP-independent"
@@ -715,13 +1066,13 @@ def assert_core_contract(core_raw: str) -> None:
     )
 
 
-def test_standalone_core_template_implements_task5_comparison_contract():
+def test_standalone_core_template_implements_task6_lifecycle_report_contract():
     template_path = (
         Path(__file__).parents[1]
         / "uvm_gen/templates/common/base_scb.sv.j2"
     )
     assert template_path.is_file(), (
-        "missing Task 5 core template: "
+        "missing Task 6 core template: "
         "uvm_gen/templates/common/base_scb.sv.j2"
     )
     config = ProjectConfig(
@@ -740,8 +1091,8 @@ def test_standalone_core_template_implements_task5_comparison_contract():
 
     mutations = {
         "default transaction type": (
-            r"type TRANS_TYPE,",
-            r"type TRANS_TYPE=uvm_sequence_item,",
+            r"class common_uvm_scb #\(type TRANS_TYPE,",
+            r"class common_uvm_scb #(type TRANS_TYPE=uvm_sequence_item,",
         ),
         "unconditional null config assignment": (
             r"(?s)if \(uvm_config_db#\(common_uvm_scb_cfg\)::get\(this, \"\", \"cfg\", configured\)\) begin\s*"
@@ -889,6 +1240,48 @@ def test_standalone_core_template_implements_task5_comparison_contract():
         ),
     }
     for description, (pattern, replacement) in mutations.items():
+        broken, replacements = re.subn(pattern, replacement, core_raw)
+        assert replacements == 1, f"failed to construct {description} mutation"
+        with pytest.raises(AssertionError):
+            assert_core_contract(broken)
+
+    task_six_mutations = {
+        "missing finalized guard": (
+            r"(?m)^[ \t]*if \(m_finalized\) return;[ \t]*$",
+            "",
+        ),
+        "lossy residual classified as mismatch": (
+            r"(?s)(function void common_uvm_scb::finalize_pending\(\);.*?)"
+            r"record_drop\(state, state\.expected_q\.pop_front\(\)\);",
+            r'\1record_mismatch(state, state.expected_q.pop_front(), null, "wrong");',
+        ),
+        "report includes normal rows": (
+            r"if \(row\.issue_count != 0\) begin",
+            "if (row.issue_count >= 0) begin",
+        ),
+        "top-N ignored": (
+            r"(?s)shown = \(effective_limit == -1\) \? rows\.size\(\)\s*"
+            r": \(\(effective_limit < rows\.size\(\)\) \? effective_limit : rows\.size\(\)\);",
+            "shown = rows.size();",
+        ),
+        "descending stream tie break": (
+            r"return left\.stream_id < right\.stream_id;",
+            "return left.stream_id > right.stream_id;",
+        ),
+        "current gauge reset only with counters": (
+            r"(?s)m_current_pending = 0;\s*if \(clear_counters\) begin",
+            "if (clear_counters) begin\n        m_current_pending = 0;",
+        ),
+        "proxy accepts reserved minus two": (
+            r"if \(limit < -1\) begin",
+            "if (limit < -2) begin",
+        ),
+        "proxy registration skipped": (
+            r"if \(!common_scb_registry::register_proxy\(m_proxy, registry_error\)\)",
+            "if (0)",
+        ),
+    }
+    for description, (pattern, replacement) in task_six_mutations.items():
         broken, replacements = re.subn(pattern, replacement, core_raw)
         assert replacements == 1, f"failed to construct {description} mutation"
         with pytest.raises(AssertionError):

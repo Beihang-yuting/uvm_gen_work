@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from uvm_gen.config import AgentConfig, PlatformType, ProjectConfig
+from uvm_gen.generators.common import CommonGenerator
 from uvm_gen.generators.platform import PlatformGenerator
 
 
@@ -31,6 +32,41 @@ def generate(
 
 def read(project: Path, relative_path: str) -> str:
     return (project / relative_path).read_text(encoding="utf-8")
+
+
+EXPECTED_COMMON_TEMPLATES = [
+    ("common_lib_pkg.sv", "common/common_pkg.sv.j2"),
+    ("common_dec.sv", "common/common_dec.sv.j2"),
+    ("common_report_server.sv", "common/report_server.sv.j2"),
+    ("common_self_debug_scb.sv", "common/self_debug_scb.sv.j2"),
+    ("common_draw_table.sv", "common/draw_table.sv.j2"),
+    ("common_scb_types.sv", "common/common_scb_types.sv.j2"),
+    ("common_scb_reporter.sv", "common/common_scb_reporter.sv.j2"),
+    ("common_scb_registry.sv", "common/common_scb_registry.sv.j2"),
+    ("common_uvm_scb_legacy.sv", "common/legacy_scb.sv.j2"),
+    ("common_uvm_scb.sv", "common/base_scb.sv.j2"),
+]
+
+EXPECTED_COMMON_INCLUDES = [
+    "common_dec.sv",
+    "common_draw_table.sv",
+    "common_report_server.sv",
+    "common_self_debug_scb.sv",
+    "common_scb_types.sv",
+    "common_scb_reporter.sv",
+    "common_scb_registry.sv",
+    "common_uvm_scb_legacy.sv",
+    "common_uvm_scb.sv",
+]
+
+
+def assert_final_common_layout(templates, package: str) -> None:
+    assert templates == EXPECTED_COMMON_TEMPLATES
+    active_includes = re.findall(
+        r'(?m)^[ \t]*`include[ \t]+"([^"\r\n]+)"[ \t]*$',
+        strip_sv_comments(package),
+    )
+    assert active_includes == EXPECTED_COMMON_INCLUDES
 
 
 def strip_sv_comments(systemverilog: str) -> str:
@@ -424,6 +460,10 @@ def test_common_package_includes_scoreboard_dependencies_in_order(
     project = generate(tmp_path, platform_type)
     common_package = strip_sv_comments(read(project, "common/common_lib_pkg.sv"))
     required_includes = [
+        "common_dec.sv",
+        "common_draw_table.sv",
+        "common_report_server.sv",
+        "common_self_debug_scb.sv",
         "common_scb_types.sv",
         "common_scb_reporter.sv",
         "common_scb_registry.sv",
@@ -434,14 +474,73 @@ def test_common_package_includes_scoreboard_dependencies_in_order(
         r'(?m)^[ \t]*`include[ \t]+"([^"\r\n]+)"[ \t]*$',
         common_package,
     )
-    scoreboard_includes = [
-        filename for filename in active_includes if filename in required_includes
-    ]
-
-    assert scoreboard_includes == required_includes, (
-        "scoreboard package include sequence mismatch: "
-        f"expected {required_includes}, got {scoreboard_includes}"
+    assert active_includes == required_includes, (
+        "common package include sequence mismatch: "
+        f"expected {required_includes}, got {active_includes}"
     )
+
+
+def test_final_common_layout_contract_rejects_generator_or_package_reordering():
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=False,
+    )
+    package = PlatformGenerator(config).render_template(
+        "common/common_pkg.sv.j2",
+        file_name="common_lib_pkg.sv",
+    )
+    assert_final_common_layout(CommonGenerator.TEMPLATES, package)
+
+    wrong_templates = list(EXPECTED_COMMON_TEMPLATES)
+    wrong_templates[-1], wrong_templates[-2] = (
+        wrong_templates[-2],
+        wrong_templates[-1],
+    )
+    with pytest.raises(AssertionError):
+        assert_final_common_layout(wrong_templates, package)
+
+    wrong_package = package.replace(
+        '    `include "common_scb_reporter.sv"\n'
+        '    `include "common_scb_registry.sv"',
+        '    `include "common_scb_registry.sv"\n'
+        '    `include "common_scb_reporter.sv"',
+    )
+    assert wrong_package != package, "failed to construct package-order mutation"
+    with pytest.raises(AssertionError):
+        assert_final_common_layout(EXPECTED_COMMON_TEMPLATES, wrong_package)
+
+
+def test_v2_finalizes_in_check_and_only_renders_in_report(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    core = read(project, "common/common_uvm_scb.sv")
+    check_body = core[core.index("function void common_uvm_scb::check_phase") :]
+    report_body = core[core.index("function void common_uvm_scb::report_phase") :]
+    assert "finalize_pending();" in check_body
+    assert "print_report();" in report_body
+    assert report_body.index("print_report();") < report_body.index("endfunction")
+
+
+def test_v2_report_has_limit_and_omission_accounting(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    core = read(project, "common/common_uvm_scb.sv")
+    assert "Problem streams: total=%0d shown=%0d omitted=%0d" in core
+    assert "limit == -2" in core
+    assert "limit == -1" in core
+    assert "m_suppressed_details" in core
+    assert "normal streams" not in core.lower()
+
+
+def test_non_aip_common_has_no_adapter_or_aip_commands(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type, aip_core=False)
+    assert not (project / "common/common_scb_aip_adapter.sv").exists()
+    common_files = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (project / "common").glob("*.sv")
+    )
+    assert "aip_cmd" not in common_files
 
 
 def test_v2_types_expose_approved_defaults(tmp_path, platform_type):

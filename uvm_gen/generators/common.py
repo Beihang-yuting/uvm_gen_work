@@ -11,7 +11,11 @@ class CommonGenerator(BaseGenerator):
         ("common_report_server.sv", "common/report_server.sv.j2"),
         ("common_self_debug_scb.sv", "common/self_debug_scb.sv.j2"),
         ("common_draw_table.sv", "common/draw_table.sv.j2"),
+        ("common_scb_types.sv", "common/common_scb_types.sv.j2"),
+        ("common_scb_reporter.sv", "common/common_scb_reporter.sv.j2"),
+        ("common_scb_registry.sv", "common/common_scb_registry.sv.j2"),
         ("common_uvm_scb_legacy.sv", "common/legacy_scb.sv.j2"),
+        ("common_uvm_scb.sv", "common/base_scb.sv.j2"),
     ]
 
     def generate(self, output_dir: str) -> None:
