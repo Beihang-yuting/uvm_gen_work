@@ -94,12 +94,12 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
             r"(?m)^[ \t]*protected\s+common_scb_control_proxy\s+m_proxy\s*;"
         ),
         "row ordering helper": (
-            r"(?m)^[ \t]*protected\s+extern\s+function\s+bit\s+row_before\s*\("
+            r"(?m)^[ \t]*extern\s+protected\s+function\s+bit\s+row_before\s*\("
             r"\s*common_scb_problem_row\s+left\s*,\s*"
             r"common_scb_problem_row\s+right\s*\)\s*;"
         ),
         "row builder helper": (
-            r"(?m)^[ \t]*protected\s+extern\s+function\s+common_scb_problem_row\s+"
+            r"(?m)^[ \t]*extern\s+protected\s+function\s+common_scb_problem_row\s+"
             r"make_row\s*\(\s*state_t\s+state\s*\)\s*;"
         ),
     }
@@ -164,7 +164,7 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
                 "ten report cells",
                 r"row\.cells\s*=\s*'\{\s*row\.status\.name\s*\(\s*\)\s*,\s*"
                 r"\$sformatf\s*\(\s*\"0x%0h\"\s*,\s*state\.stream_id\s*\)\s*,"
-                r".*?state\.matches.*?state\.mismatches.*?state\.allowed_drops.*?"
+                r".*?state\.match_count.*?state\.mismatches.*?state\.allowed_drops.*?"
                 r"state\.unexpected_actuals.*?pending_expected.*?pending_actual.*?"
                 r"state\.overflows.*?state\.peak_pending.*?\}\s*;",
             ),
@@ -228,11 +228,21 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
         r"pending_actual\s*\+=\s*m_streams\s*\[\s*id\s*\]\.actual_q\.size\s*\(\s*\)\s*;",
         summary,
     )
-    assert (
-        '"status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "' in summary
-        and '"drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d "' in summary
-        and '"overflow=%0d peak_pending=%0d suppressed=%0d"' in summary
-    ), "get_summary must use the exact Task 6 aggregate format"
+    summary_format = re.search(
+        r"return\s+\$sformatf\s*\(\s*\{\s*"
+        r'"status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "\s*,\s*'
+        r'"drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d "\s*,\s*'
+        r'"overflow=%0d peak_pending=%0d suppressed=%0d"\s*\}\s*,',
+        summary,
+    )
+    assert summary_format, (
+        "get_summary must pass the exact Task 6 field order as one explicit "
+        "concatenation expression"
+    )
+    assert not re.search(
+        r"\$sformatf\s*\(\s*\"[^\"]*\"\s*\"",
+        summary,
+    ), "get_summary must not rely on adjacent string literals"
 
     report = core_method_body(
         core,
@@ -451,6 +461,90 @@ def assert_task6_proxy_contract(core: str) -> None:
     assert not re.search(r"\baip_|AIP_", proxy_match.group(0))
 
 
+def assert_vcs_portable_match_counter(types_raw: str, core_raw: str) -> None:
+    types = strip_sv_comments(types_raw)
+    core = strip_sv_comments(core_raw)
+    stream_state = re.search(
+        r"(?ms)^[ \t]*class\s+common_scb_stream_state\b(?P<body>.*?)"
+        r"^[ \t]*endclass",
+        types,
+    )
+    assert stream_state, "missing common_scb_stream_state declaration"
+    state_body = stream_state.group("body")
+    assert re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+match_count\s*;",
+        state_body,
+    ), "stream state must use the VCS-portable match_count field"
+    assert not re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+matches\s*;",
+        state_body,
+    ), "matches is a reserved SystemVerilog identifier"
+    assert not re.search(r"\.matches\b", types + core), (
+        "generated scoreboard sources must not retain stale .matches references"
+    )
+
+
+def render_task6_sources() -> tuple[str, str]:
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=False,
+    )
+    generator = PlatformGenerator(config)
+    core = generator.render_template(
+        "common/base_scb.sv.j2",
+        file_name="common_uvm_scb.sv",
+    )
+    types = generator.render_template(
+        "common/common_scb_types.sv.j2",
+        file_name="common_scb_types.sv",
+    )
+    return core, types
+
+
+def test_vcs_portability_summary_uses_explicit_string_concatenation():
+    core_raw, _ = render_task6_sources()
+    summary = core_method_body(
+        strip_sv_comments(core_raw),
+        r"function\s+string\s+common_uvm_scb::get_summary\s*\(\s*\)",
+        "get_summary",
+    )
+    assert re.search(r"return\s+\$sformatf\s*\(\s*\{", summary)
+
+
+def test_vcs_portability_uses_extern_before_protected():
+    core_raw, _ = render_task6_sources()
+    core = strip_sv_comments(core_raw)
+    declaration = core[: core.index("endclass", core.index("class common_uvm_scb"))]
+    assert len(re.findall(r"(?m)^[ \t]*extern\s+protected\s+function\b", declaration)) == 18
+    assert not re.search(r"(?m)^[ \t]*protected\s+extern\s+function\b", declaration)
+
+
+def test_vcs_portability_allocates_queue_items_before_push():
+    core_raw, _ = render_task6_sources()
+    core = strip_sv_comments(core_raw)
+    expected = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::push_expected\s*\([^;]+\)",
+        "push_expected",
+    )
+    actual = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::push_actual\s*\([^;]+\)",
+        "push_actual",
+    )
+    assert re.search(r"^[ \t]*pending_t\s+pending\s*;", expected, flags=re.MULTILINE)
+    assert re.search(r"^[ \t]*pending_t\s+pending\s*;", actual, flags=re.MULTILINE)
+    assert not re.search(r"push_back\s*\(\s*new\s*\(", expected + actual)
+
+
+def test_vcs_portability_avoids_reserved_matches_identifier():
+    core_raw, types_raw = render_task6_sources()
+    assert_vcs_portable_match_counter(types_raw, core_raw)
+
+
 def assert_core_contract(core_raw: str) -> None:
     core = strip_sv_comments(core_raw)
 
@@ -513,6 +607,41 @@ def assert_core_contract(core_raw: str) -> None:
     }
     for description, pattern in declarations.items():
         assert re.search(pattern, core), f"missing core {description}"
+
+    core_declaration = core[: core.index("endclass", core.index("class common_uvm_scb"))]
+    protected_methods = (
+        "state_for",
+        "retained_copy",
+        "can_enqueue",
+        "reconcile_ordered_exact",
+        "reconcile_ordered_lossy",
+        "reconcile_unordered_expected",
+        "reconcile_unordered_actual",
+        "record_match",
+        "record_mismatch",
+        "record_drop",
+        "record_unexpected",
+        "record_overflow",
+        "emit_detail",
+        "publish_result",
+        "update_peak",
+        "row_before",
+        "make_row",
+        "finalize_pending",
+    )
+    for method in protected_methods:
+        assert re.search(
+            rf"(?m)^[ \t]*extern\s+protected\s+function\s+\w+\s+"
+            rf"{method}\s*\([^;]*;",
+            core_declaration,
+        ), f"protected method {method} must use VCS-portable extern protected order"
+    assert len(re.findall(r"(?m)^[ \t]*extern\s+protected\s+function\b", core_declaration)) == len(
+        protected_methods
+    ), "every protected method declaration must use extern protected order"
+    assert not re.search(
+        r"(?m)^[ \t]*protected\s+extern\s+function\b",
+        core_declaration,
+    ), "VCS rejects protected extern qualifier order"
 
     counters = (
         "expected_inputs",
@@ -750,12 +879,14 @@ def assert_core_contract(core_raw: str) -> None:
         [
             ("expected retained declaration", r"^[ \t]*TRANS_TYPE\s+retained\s*;"),
             ("expected state declaration", r"^[ \t]*state_t\s+state\s*;"),
+            ("expected pending declaration", r"^[ \t]*pending_t\s+pending\s*;"),
             ("expected state lookup", r"state\s*=\s*state_for\s*\(\s*stream_id\s*\)\s*;"),
             ("global expected input", r"m_expected_inputs\s*\+\+\s*;"),
             ("stream expected input", r"state\.expected_inputs\s*\+\+\s*;"),
             ("expected retained copy", r"retained_copy\s*\(\s*tr\s*,\s*stream_id\s*,\s*\"expected\""),
             ("expected admission", r"can_enqueue\s*\(\s*state\s*,\s*stream_id\s*,\s*\"expected\""),
-            ("expected enqueue", r"state\.expected_q\.push_back\s*\(\s*new\s*\(\s*retained\s*,\s*kind\s*\)\s*\)\s*;"),
+            ("expected pending allocation", r"pending\s*=\s*new\s*\(\s*retained\s*,\s*kind\s*\)\s*;"),
+            ("expected enqueue", r"state\.expected_q\.push_back\s*\(\s*pending\s*\)\s*;"),
             ("expected pending gauge increment", r"m_current_pending\s*\+\+\s*;"),
             ("expected peak update", r"update_peak\s*\(\s*state\s*\)\s*;"),
             ("expected dispatch", r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)"),
@@ -777,6 +908,7 @@ def assert_core_contract(core_raw: str) -> None:
         [
             ("actual retained declaration", r"^[ \t]*TRANS_TYPE\s+retained\s*;"),
             ("actual state declaration", r"^[ \t]*state_t\s+state\s*;"),
+            ("actual pending declaration", r"^[ \t]*pending_t\s+pending\s*;"),
             ("actual state lookup", r"state\s*=\s*state_for\s*\(\s*stream_id\s*\)\s*;"),
             ("global actual input", r"m_actual_inputs\s*\+\+\s*;"),
             ("stream actual input", r"state\.actual_inputs\s*\+\+\s*;"),
@@ -789,7 +921,8 @@ def assert_core_contract(core_raw: str) -> None:
             ("strict warning", r"SCB_ACTUAL_FIRST"),
             ("actual retained copy", r"retained_copy\s*\(\s*tr\s*,\s*stream_id\s*,\s*\"actual\""),
             ("actual admission", r"can_enqueue\s*\(\s*state\s*,\s*stream_id\s*,\s*\"actual\""),
-            ("actual enqueue", r"state\.actual_q\.push_back\s*\(\s*new\s*\(\s*retained\s*,\s*kind\s*\)\s*\)\s*;"),
+            ("actual pending allocation", r"pending\s*=\s*new\s*\(\s*retained\s*,\s*kind\s*\)\s*;"),
+            ("actual enqueue", r"state\.actual_q\.push_back\s*\(\s*pending\s*\)\s*;"),
             ("actual pending gauge increment", r"m_current_pending\s*\+\+\s*;"),
             ("actual peak update", r"update_peak\s*\(\s*state\s*\)\s*;"),
             ("actual dispatch", r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)"),
@@ -799,6 +932,9 @@ def assert_core_contract(core_raw: str) -> None:
     )
     assert len(re.findall(r"m_current_pending\s*\+\+\s*;", actual_push)) == 1, (
         "each successful actual enqueue must increment the gauge exactly once"
+    )
+    assert not re.search(r"push_back\s*\(\s*new\s*\(", expected_push + actual_push), (
+        "VCS-portable queue insertion requires a separately allocated pending handle"
     )
 
     peak_update = core_method_body(
@@ -930,7 +1066,7 @@ def assert_core_contract(core_raw: str) -> None:
     )
 
     accounting = {
-        "record_match": ("state.matches", "m_matches", "publish_result"),
+        "record_match": ("state.match_count", "m_matches", "publish_result"),
         "record_mismatch": ("state.mismatches", "m_mismatches", "publish_result", "SCB_MISMATCH"),
         "record_drop": ("state.allowed_drops", "m_allowed_drops"),
         "record_unexpected": ("state.unexpected_actuals", "m_unexpected_actuals", "publish_result", "SCB_UNEXPECTED_ACTUAL"),
@@ -986,7 +1122,7 @@ def assert_core_contract(core_raw: str) -> None:
     ):
         expected_match = re.search(expected_decrement, body)
         actual_match = re.search(actual_decrement, body)
-        first_counter = re.search(r"state\.(?:matches|mismatches)\s*\+\+\s*;", body)
+        first_counter = re.search(r"state\.(?:match_count|mismatches)\s*\+\+\s*;", body)
         assert expected_match and actual_match and first_counter, (
             f"{description} must decrement every non-null consumed side"
         )
@@ -1015,6 +1151,10 @@ def assert_core_contract(core_raw: str) -> None:
         assert not re.search(
             r"if\s*\([^)]*\bm_current_pending\b[^)]*\)", body
         ), f"{description} must not hide pending accounting bugs with a gauge guard"
+
+    assert not re.search(r"\.matches\b", core), (
+        "generated core must not reference the reserved SystemVerilog identifier matches"
+    )
 
     details = core_method_body(
         core,
@@ -1086,8 +1226,13 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
         "common/base_scb.sv.j2",
         file_name="common_uvm_scb.sv",
     )
+    types_raw = PlatformGenerator(config).render_template(
+        "common/common_scb_types.sv.j2",
+        file_name="common_scb_types.sv",
+    )
 
     assert_core_contract(core_raw)
+    assert_vcs_portable_match_counter(types_raw, core_raw)
 
     mutations = {
         "default transaction type": (
@@ -1135,13 +1280,13 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
         ),
         "missing expected pending increment": (
             r"(?s)(function void common_uvm_scb::push_expected\b.*?"
-            r"state\.expected_q\.push_back\(new\(retained, kind\)\);)\s*"
+            r"state\.expected_q\.push_back\(pending\);)\s*"
             r"m_current_pending\+\+;",
             r"\1",
         ),
         "missing actual pending increment": (
             r"(?s)(function void common_uvm_scb::push_actual\b.*?"
-            r"state\.actual_q\.push_back\(new\(retained, kind\)\);)\s*"
+            r"state\.actual_q\.push_back\(pending\);)\s*"
             r"m_current_pending\+\+;",
             r"\1",
         ),
@@ -1246,6 +1391,36 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
             assert_core_contract(broken)
 
     task_six_mutations = {
+        "adjacent summary string literals": (
+            r"(?s)\$sformatf\s*\(\s*\{\s*"
+            r'"status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "\s*,\s*'
+            r'"drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d "\s*,\s*'
+            r'"overflow=%0d peak_pending=%0d suppressed=%0d"\s*\}\s*,',
+            '$sformatf("status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "\n'
+            '        "drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d "\n'
+            '        "overflow=%0d peak_pending=%0d suppressed=%0d",',
+        ),
+        "invalid protected extern order": (
+            r"extern protected function state_t state_for",
+            "protected extern function state_t state_for",
+        ),
+        "inline expected queue allocation": (
+            r"pending = new\(retained, kind\);\s*"
+            r"state\.expected_q\.push_back\(pending\);",
+            "state.expected_q.push_back(new(retained, kind));",
+        ),
+        "expected allocation before admission": (
+            r"(?s)(function void common_uvm_scb::push_expected\([^;]+;\s*"
+            r"TRANS_TYPE retained;\s*state_t state;\s*pending_t pending;)\s*"
+            r"(?P<admission>.*?if \(!can_enqueue\(state, stream_id, \"expected\", "
+            r"state\.expected_q\.size\(\)\)\) return;)\s*"
+            r"pending = new\(retained, kind\);",
+            r"\1\n    pending = new(retained, kind);\g<admission>",
+        ),
+        "reserved state matches reference": (
+            r"state\.match_count\+\+;",
+            "state.matches++;",
+        ),
         "missing finalized guard": (
             r"(?m)^[ \t]*if \(m_finalized\) return;[ \t]*$",
             "",
@@ -1286,3 +1461,23 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
         assert replacements == 1, f"failed to construct {description} mutation"
         with pytest.raises(AssertionError):
             assert_core_contract(broken)
+
+    portable_counter_mutations = {
+        "reserved match field declaration": (
+            types_raw.replace(
+                "longint unsigned match_count;",
+                "longint unsigned matches;",
+            ),
+            core_raw,
+        ),
+        "stale core match field reference": (
+            types_raw,
+            core_raw.replace("state.match_count++;", "state.matches++;", 1),
+        ),
+    }
+    for description, (broken_types, broken_core) in portable_counter_mutations.items():
+        assert (broken_types, broken_core) != (types_raw, core_raw), (
+            f"failed to construct {description} mutation"
+        )
+        with pytest.raises(AssertionError):
+            assert_vcs_portable_match_counter(broken_types, broken_core)

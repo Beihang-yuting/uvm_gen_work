@@ -574,6 +574,15 @@ def test_v2_types_expose_approved_defaults(tmp_path, platform_type):
     for description, pattern in declarations.items():
         assert re.search(pattern, types), f"missing v2 types {description}"
 
+    assert re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+match_count\s*;",
+        types,
+    ), "stream state must use the VCS-portable match_count field"
+    assert not re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+matches\s*;",
+        types,
+    ), "matches is a reserved SystemVerilog identifier"
+
     diagnostic_counter = re.search(
         r"(?m)^[ \t]*longint\s+unsigned\s+diagnostic_warnings\s*;",
         types,

@@ -56,48 +56,48 @@ class common_uvm_scb #(type TRANS_TYPE,
                                                stream_id_t stream_id='1,
                                                int kind=-1);
 
-    protected extern function state_t state_for(stream_id_t stream_id);
-    protected extern function bit retained_copy(TRANS_TYPE source,
+    extern protected function state_t state_for(stream_id_t stream_id);
+    extern protected function bit retained_copy(TRANS_TYPE source,
                                                  stream_id_t stream_id,
                                                  string side,
                                                  output TRANS_TYPE retained);
-    protected extern function bit can_enqueue(state_t state,
+    extern protected function bit can_enqueue(state_t state,
                                                stream_id_t stream_id,
                                                string side,
                                                int depth);
-    protected extern function void reconcile_ordered_exact(state_t state);
-    protected extern function void reconcile_ordered_lossy(state_t state);
-    protected extern function void reconcile_unordered_expected(state_t state);
-    protected extern function void reconcile_unordered_actual(state_t state);
-    protected extern function void record_match(state_t state,
+    extern protected function void reconcile_ordered_exact(state_t state);
+    extern protected function void reconcile_ordered_lossy(state_t state);
+    extern protected function void reconcile_unordered_expected(state_t state);
+    extern protected function void reconcile_unordered_actual(state_t state);
+    extern protected function void record_match(state_t state,
                                                  pending_t expected,
                                                  pending_t actual,
                                                  string diff="");
-    protected extern function void record_mismatch(state_t state,
+    extern protected function void record_mismatch(state_t state,
                                                     pending_t expected,
                                                     pending_t actual,
                                                     string diff);
-    protected extern function void record_drop(state_t state, pending_t expected);
-    protected extern function void record_unexpected(state_t state, pending_t actual,
+    extern protected function void record_drop(state_t state, pending_t expected);
+    extern protected function void record_unexpected(state_t state, pending_t actual,
                                                       string reason);
-    protected extern function void record_overflow(state_t state,
+    extern protected function void record_overflow(state_t state,
                                                     stream_id_t stream_id,
                                                     string side,
                                                     TRANS_TYPE tr,
                                                     int kind);
-    protected extern function void emit_detail(stream_id_t stream_id,
+    extern protected function void emit_detail(stream_id_t stream_id,
                                                 string id,
                                                 string message);
-    protected extern function void publish_result(state_t state,
+    extern protected function void publish_result(state_t state,
                                                   pending_t expected,
                                                   pending_t actual,
                                                   bit matched,
                                                   string diff);
-    protected extern function void update_peak(state_t state);
-    protected extern function bit row_before(common_scb_problem_row left,
+    extern protected function void update_peak(state_t state);
+    extern protected function bit row_before(common_scb_problem_row left,
                                               common_scb_problem_row right);
-    protected extern function common_scb_problem_row make_row(state_t state);
-    protected extern function void finalize_pending();
+    extern protected function common_scb_problem_row make_row(state_t state);
+    extern protected function void finalize_pending();
 endclass
 
 class common_scb_typed_proxy #(type TRANS_TYPE,
@@ -251,12 +251,14 @@ function void common_uvm_scb::push_expected(TRANS_TYPE tr,
                                             int kind=-1);
     TRANS_TYPE retained;
     state_t state;
+    pending_t pending;
     state = state_for(stream_id);
     m_expected_inputs++;
     state.expected_inputs++;
     if (!retained_copy(tr, stream_id, "expected", retained)) return;
     if (!can_enqueue(state, stream_id, "expected", state.expected_q.size())) return;
-    state.expected_q.push_back(new(retained, kind));
+    pending = new(retained, kind);
+    state.expected_q.push_back(pending);
     m_current_pending++;
     update_peak(state);
     case (m_cfg.m_cmp_mode)
@@ -272,6 +274,7 @@ function void common_uvm_scb::push_actual(TRANS_TYPE tr,
                                           int kind=-1);
     TRANS_TYPE retained;
     state_t state;
+    pending_t pending;
     state = state_for(stream_id);
     m_actual_inputs++;
     state.actual_inputs++;
@@ -285,7 +288,8 @@ function void common_uvm_scb::push_actual(TRANS_TYPE tr,
     end
     if (!retained_copy(tr, stream_id, "actual", retained)) return;
     if (!can_enqueue(state, stream_id, "actual", state.actual_q.size())) return;
-    state.actual_q.push_back(new(retained, kind));
+    pending = new(retained, kind);
+    state.actual_q.push_back(pending);
     m_current_pending++;
     update_peak(state);
     case (m_cfg.m_cmp_mode)
@@ -418,7 +422,7 @@ function void common_uvm_scb::record_match(state_t state,
                                            string diff="");
     if (expected != null) m_current_pending--;
     if (actual != null) m_current_pending--;
-    state.matches++;
+    state.match_count++;
     m_matches++;
     publish_result(state, expected, actual, 1, diff);
 endfunction
@@ -499,7 +503,7 @@ function common_scb_problem_row common_uvm_scb::make_row(state_t state);
     row.cells = '{
         row.status.name(),
         $sformatf("0x%0h", state.stream_id),
-        $sformatf("%0d", state.matches),
+        $sformatf("%0d", state.match_count),
         $sformatf("%0d", state.mismatches),
         $sformatf("%0d", state.allowed_drops),
         $sformatf("%0d", state.unexpected_actuals),
@@ -535,10 +539,10 @@ function string common_uvm_scb::get_summary();
         pending_expected += m_streams[id].expected_q.size();
         pending_actual += m_streams[id].actual_q.size();
     end
-    return $sformatf(
-        "status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "
-        "drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d "
-        "overflow=%0d peak_pending=%0d suppressed=%0d",
+    return $sformatf({
+        "status=%s expected=%0d actual=%0d match=%0d mismatch=%0d ",
+        "drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d ",
+        "overflow=%0d peak_pending=%0d suppressed=%0d"},
         get_status().name(), m_expected_inputs, m_actual_inputs, m_matches,
         m_mismatches, m_allowed_drops, m_unexpected_actuals,
         pending_expected, pending_actual, m_overflows, m_peak_pending,
