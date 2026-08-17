@@ -48,18 +48,24 @@ def strip_sv_comments(systemverilog: str) -> str:
     )
 
 
-def test_standalone_registry_template_exposes_aip_independent_control_api():
-    config = ProjectConfig(
-        block_name="top",
-        author="test",
-        agents=[AgentConfig("axi")],
-        platform_type=PlatformType.ADVANCE,
-        aip_core=False,
+def registry_function_body(
+    registry: str, declaration: str, description: str
+) -> str:
+    match = re.search(
+        rf"(?ms){declaration}(?P<body>.*?)^[ \t]*endfunction",
+        registry,
     )
-    registry_raw = PlatformGenerator(config).render_template(
-        "common/common_scb_registry.sv.j2",
-        file_name="common_scb_registry.sv",
-    )
+    assert match, f"missing registry {description} function body"
+    return match.group("body")
+
+
+def registry_match_position(body: str, pattern: str, description: str) -> int:
+    match = re.search(pattern, body, flags=re.MULTILINE | re.DOTALL)
+    assert match, f"missing registry {description}"
+    return match.start()
+
+
+def assert_registry_contract(registry_raw: str) -> None:
     registry = strip_sv_comments(registry_raw)
 
     declarations = {
@@ -122,15 +128,194 @@ def test_standalone_registry_template_exposes_aip_independent_control_api():
     for description, pattern in declarations.items():
         assert re.search(pattern, registry), f"missing registry {description}"
 
-    assert re.search(r"\bnames\.sort[ \t]*\([ \t]*\)[ \t]*;", registry), (
-        "registry names must be sorted deterministically"
+    register_proxy = registry_function_body(
+        registry,
+        (
+            r"^[ \t]*static[ \t]+function[ \t]+bit[ \t]+register_proxy\s*\("
+            r"\s*common_scb_control_proxy[ \t]+proxy[ \t]*,\s*"
+            r"output[ \t]+string[ \t]+error[ \t]*\)[ \t]*;"
+        ),
+        "register_proxy",
     )
+    register_positions = [
+        registry_match_position(
+            register_proxy,
+            r"^[ \t]*string[ \t]+name[ \t]*;",
+            "register_proxy local name declaration",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"if\s*\(\s*proxy\s*==\s*null\s*\)\s*begin\s*"
+            r"error\s*=\s*\"cannot register a null scoreboard proxy\"\s*;\s*"
+            r"return\s+0\s*;\s*end",
+            "register_proxy null rejection",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"name\s*=\s*proxy\.scoreboard_name\s*\(\s*\)\s*;",
+            "register_proxy scoreboard name lookup",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"if\s*\(\s*name\s*==\s*\"\"\s*\)\s*begin\s*"
+            r"error\s*=\s*\"cannot register a scoreboard with an empty name\"\s*;\s*"
+            r"return\s+0\s*;\s*end",
+            "register_proxy empty-name rejection",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"if\s*\(\s*m_proxies\.exists\s*\(\s*name\s*\)\s*\)\s*begin\s*"
+            r"error\s*=\s*\$sformatf\s*\(\s*\"scoreboard '%s' is already registered\"\s*,\s*"
+            r"name\s*\)\s*;\s*return\s+0\s*;\s*end",
+            "register_proxy duplicate rejection",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"m_proxies\s*\[\s*name\s*\]\s*=\s*proxy\s*;",
+            "register_proxy storage assignment",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"error\s*=\s*\"\"\s*;",
+            "register_proxy success error reset",
+        ),
+        registry_match_position(
+            register_proxy,
+            r"return\s+1\s*;",
+            "register_proxy success return",
+        ),
+    ]
+    assert register_positions == sorted(register_positions), (
+        "register_proxy must declare, guard, then register in execution order"
+    )
+
+    find = registry_function_body(
+        registry,
+        (
+            r"^[ \t]*static[ \t]+function[ \t]+common_scb_control_proxy[ \t]+"
+            r"find[ \t]*\([ \t]*string[ \t]+name[ \t]*\)[ \t]*;"
+        ),
+        "find",
+    )
+    find_positions = [
+        registry_match_position(
+            find,
+            r"if\s*\(\s*!\s*m_proxies\.exists\s*\(\s*name\s*\)\s*\)\s*"
+            r"return\s+null\s*;",
+            "find absent-name rejection",
+        ),
+        registry_match_position(
+            find,
+            r"return\s+m_proxies\s*\[\s*name\s*\]\s*;",
+            "find stored proxy return",
+        ),
+    ]
+    assert find_positions == sorted(find_positions), (
+        "find must reject absent names before returning the stored proxy"
+    )
+
+    get_names = registry_function_body(
+        registry,
+        (
+            r"^[ \t]*static[ \t]+function[ \t]+void[ \t]+get_names[ \t]*\("
+            r"[ \t]*ref[ \t]+string[ \t]+names[ \t]*\[[ \t]*\$[ \t]*\][ \t]*\)[ \t]*;"
+        ),
+        "get_names",
+    )
+    get_names_positions = [
+        registry_match_position(
+            get_names,
+            r"names\.delete\s*\(\s*\)\s*;",
+            "get_names output reset",
+        ),
+        registry_match_position(
+            get_names,
+            r"foreach\s*\(\s*m_proxies\s*\[\s*name\s*\]\s*\)\s*"
+            r"names\.push_back\s*\(\s*name\s*\)\s*;",
+            "get_names proxy enumeration",
+        ),
+        registry_match_position(
+            get_names,
+            r"names\.sort\s*\(\s*\)\s*;",
+            "get_names deterministic sort",
+        ),
+    ]
+    assert get_names_positions == sorted(get_names_positions), (
+        "get_names must reset, enumerate, then sort names"
+    )
+
+    size = registry_function_body(
+        registry,
+        r"^[ \t]*static[ \t]+function[ \t]+int[ \t]+size[ \t]*\([ \t]*\)[ \t]*;",
+        "size",
+    )
+    assert re.search(r"return\s+m_proxies\.num\s*\(\s*\)\s*;", size), (
+        "size must return the proxy count"
+    )
+
     assert not re.search(r"\baip_|AIP_", registry_raw), (
         "registry must not depend on AIP identifiers or tokens"
     )
     assert "{{" not in registry_raw and "{%" not in registry_raw, (
         "registry render must not retain Jinja markers"
     )
+
+
+def test_standalone_registry_template_exposes_aip_independent_control_api():
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=False,
+    )
+    registry_raw = PlatformGenerator(config).render_template(
+        "common/common_scb_registry.sv.j2",
+        file_name="common_scb_registry.sv",
+    )
+
+    assert_registry_contract(registry_raw)
+
+
+def test_registry_contract_rejects_broken_control_bodies():
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=False,
+    )
+    registry_raw = PlatformGenerator(config).render_template(
+        "common/common_scb_registry.sv.j2",
+        file_name="common_scb_registry.sv",
+    )
+    mutations = {
+        "always-success registration": (
+            r"(?ms)(^[ \t]*static[ \t]+function[ \t]+bit[ \t]+register_proxy.*?;).*?"
+            r"^[ \t]*endfunction",
+            r'\1\n        error = "";\n        return 1;\n    endfunction',
+        ),
+        "always-null find": (
+            r"(?ms)(^[ \t]*static[ \t]+function[ \t]+common_scb_control_proxy[ \t]+find.*?;).*?"
+            r"^[ \t]*endfunction",
+            r"\1\n        return null;\n    endfunction",
+        ),
+        "input-only get_names": (
+            r"(?ms)(^[ \t]*static[ \t]+function[ \t]+void[ \t]+get_names.*?;).*?"
+            r"^[ \t]*endfunction",
+            r"\1\n        names.sort();\n    endfunction",
+        ),
+        "constant size": (
+            r"(?ms)(^[ \t]*static[ \t]+function[ \t]+int[ \t]+size.*?;).*?"
+            r"^[ \t]*endfunction",
+            r"\1\n        return 0;\n    endfunction",
+        ),
+    }
+    for description, (pattern, replacement) in mutations.items():
+        broken, replacements = re.subn(pattern, replacement, registry_raw)
+        assert replacements == 1, f"failed to construct {description} mutation"
+        with pytest.raises(AssertionError):
+            assert_registry_contract(broken)
 
 
 def test_common_output_contains_legacy_and_v2_scoreboard_files(
