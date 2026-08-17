@@ -1,0 +1,56 @@
+{{ header(file_name) }}
+`ifndef COMMON_SCB_REGISTRY__SV
+`define COMMON_SCB_REGISTRY__SV
+
+virtual class common_scb_control_proxy extends uvm_object;
+    function new(string name="common_scb_control_proxy");
+        super.new(name);
+    endfunction
+    pure virtual function string scoreboard_name();
+    pure virtual function scb_status_e status();
+    pure virtual function string summary();
+    pure virtual function void report(int limit=-2);
+    pure virtual function bit set_report_limit(int limit, output string error);
+endclass
+
+class common_scb_registry;
+    local static common_scb_control_proxy m_proxies[string];
+
+    static function bit register_proxy(common_scb_control_proxy proxy,
+                                       output string error);
+        string name;
+        if (proxy == null) begin
+            error = "cannot register a null scoreboard proxy";
+            return 0;
+        end
+        name = proxy.scoreboard_name();
+        if (name == "") begin
+            error = "cannot register a scoreboard with an empty name";
+            return 0;
+        end
+        if (m_proxies.exists(name)) begin
+            error = $sformatf("scoreboard '%s' is already registered", name);
+            return 0;
+        end
+        m_proxies[name] = proxy;
+        error = "";
+        return 1;
+    endfunction
+
+    static function common_scb_control_proxy find(string name);
+        if (!m_proxies.exists(name)) return null;
+        return m_proxies[name];
+    endfunction
+
+    static function void get_names(ref string names[$]);
+        names.delete();
+        foreach (m_proxies[name]) names.push_back(name);
+        names.sort();
+    endfunction
+
+    static function int size();
+        return m_proxies.num();
+    endfunction
+endclass
+
+`endif

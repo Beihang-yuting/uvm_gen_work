@@ -48,6 +48,92 @@ def strip_sv_comments(systemverilog: str) -> str:
     )
 
 
+def test_standalone_registry_template_exposes_aip_independent_control_api():
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=False,
+    )
+    registry = strip_sv_comments(
+        PlatformGenerator(config).render_template(
+            "common/common_scb_registry.sv.j2",
+            file_name="common_scb_registry.sv",
+        )
+    )
+
+    declarations = {
+        "include guard": (
+            r"(?m)^[ \t]*`ifndef[ \t]+COMMON_SCB_REGISTRY__SV\b.*$\n"
+            r"[ \t]*`define[ \t]+COMMON_SCB_REGISTRY__SV\b"
+        ),
+        "control proxy": (
+            r"(?m)^[ \t]*virtual[ \t]+class[ \t]+"
+            r"common_scb_control_proxy[ \t]+extends[ \t]+uvm_object[ \t]*;"
+        ),
+        "proxy constructor": (
+            r"(?m)^[ \t]*function[ \t]+new[ \t]*\([ \t]*string[ \t]+"
+            r"name[ \t]*=[ \t]*\"common_scb_control_proxy\"[ \t]*\)[ \t]*;"
+        ),
+        "proxy scoreboard name": (
+            r"(?m)^[ \t]*pure[ \t]+virtual[ \t]+function[ \t]+string[ \t]+"
+            r"scoreboard_name[ \t]*\([ \t]*\)[ \t]*;"
+        ),
+        "proxy status": (
+            r"(?m)^[ \t]*pure[ \t]+virtual[ \t]+function[ \t]+scb_status_e[ \t]+"
+            r"status[ \t]*\([ \t]*\)[ \t]*;"
+        ),
+        "proxy summary": (
+            r"(?m)^[ \t]*pure[ \t]+virtual[ \t]+function[ \t]+string[ \t]+"
+            r"summary[ \t]*\([ \t]*\)[ \t]*;"
+        ),
+        "proxy report": (
+            r"(?m)^[ \t]*pure[ \t]+virtual[ \t]+function[ \t]+void[ \t]+"
+            r"report[ \t]*\([ \t]*int[ \t]+limit[ \t]*=[ \t]*-2[ \t]*\)[ \t]*;"
+        ),
+        "proxy report limit": (
+            r"(?m)^[ \t]*pure[ \t]+virtual[ \t]+function[ \t]+bit[ \t]+"
+            r"set_report_limit[ \t]*\([ \t]*int[ \t]+limit[ \t]*,[ \t]*"
+            r"output[ \t]+string[ \t]+error[ \t]*\)[ \t]*;"
+        ),
+        "registry": r"(?m)^[ \t]*class[ \t]+common_scb_registry[ \t]*;",
+        "registry storage": (
+            r"(?m)^[ \t]*local[ \t]+static[ \t]+common_scb_control_proxy[ \t]+"
+            r"m_proxies[ \t]*\[[ \t]*string[ \t]*\][ \t]*;"
+        ),
+        "register proxy": (
+            r"(?m)^[ \t]*static[ \t]+function[ \t]+bit[ \t]+register_proxy\s*\("
+            r"\s*common_scb_control_proxy[ \t]+proxy[ \t]*,\s*"
+            r"output[ \t]+string[ \t]+error[ \t]*\)[ \t]*;"
+        ),
+        "find": (
+            r"(?m)^[ \t]*static[ \t]+function[ \t]+common_scb_control_proxy[ \t]+"
+            r"find[ \t]*\([ \t]*string[ \t]+name[ \t]*\)[ \t]*;"
+        ),
+        "get names": (
+            r"(?m)^[ \t]*static[ \t]+function[ \t]+void[ \t]+get_names[ \t]*\("
+            r"[ \t]*ref[ \t]+string[ \t]+names[ \t]*\[[ \t]*\$[ \t]*\][ \t]*\)[ \t]*;"
+        ),
+        "size": (
+            r"(?m)^[ \t]*static[ \t]+function[ \t]+int[ \t]+size[ \t]*\([ \t]*\)"
+            r"[ \t]*;"
+        ),
+    }
+    for description, pattern in declarations.items():
+        assert re.search(pattern, registry), f"missing registry {description}"
+
+    assert re.search(r"\bnames\.sort[ \t]*\([ \t]*\)[ \t]*;", registry), (
+        "registry names must be sorted deterministically"
+    )
+    assert not re.search(r"\baip_|AIP_", registry), (
+        "registry must not depend on AIP identifiers or tokens"
+    )
+    assert "{{" not in registry and "{%" not in registry, (
+        "registry render must not retain Jinja markers"
+    )
+
+
 def test_common_output_contains_legacy_and_v2_scoreboard_files(
     tmp_path, platform_type
 ):
