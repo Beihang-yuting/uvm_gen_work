@@ -131,6 +131,23 @@ def test_aip_activity_is_command_owned(tmp_path, platform_type):
     assert "m_axi_act_sub" not in executable_environment
 
 
+def test_aip_agent_package_imports_core_package(tmp_path, platform_type):
+    project_dir = generate(tmp_path, platform_type, aip_core=True)
+    agent_package = read(
+        project_dir, "env/agents/axi_agent/src/axi_agent_pkg.sv"
+    )
+
+    assert_in_order(
+        agent_package,
+        "package axi_agent_pkg;",
+        "import uvm_pkg::*;",
+        "import aip_core_pkg::*;",
+        "import common_lib_pkg::*;",
+        '`include "axi_base_seq.sv"',
+        "endpackage",
+    )
+
+
 def test_activity_subscriber_is_explicit_opt_in(tmp_path, platform_type):
     project_dir = generate(tmp_path, platform_type, aip_core=True)
     subscriber = read(project_dir, "common/aip_activity_subscriber.sv")

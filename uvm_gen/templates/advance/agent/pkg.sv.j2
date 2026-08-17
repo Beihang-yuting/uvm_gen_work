@@ -5,6 +5,9 @@
 package {{ name }}_agent_pkg;
 
     import uvm_pkg::*;
+{% if aip_core %}
+    import aip_core_pkg::*;
+{% endif %}
 
     import common_lib_pkg::*;
     `include "{{ name }}_trans.sv"
