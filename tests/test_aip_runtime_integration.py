@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -38,30 +39,62 @@ def assert_in_order(text: str, *snippets: str) -> None:
         position = next_position + len(snippet)
 
 
+def task_body(systemverilog: str, task_name: str) -> str:
+    match = re.search(
+        rf"^[ \t]*(?:virtual[ \t]+)?task[ \t]+"
+        rf"(?:[A-Za-z_][A-Za-z0-9_$]*::)?{re.escape(task_name)}\b"
+        rf"[^;]*;(.*?)^[ \t]*endtask\b",
+        systemverilog,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"missing task definition for {task_name}"
+    return match.group(1)
+
+
+def strip_sv_comments(systemverilog: str) -> str:
+    return re.sub(
+        r"/\*.*?\*/|//[^\n]*",
+        "",
+        systemverilog,
+        flags=re.DOTALL,
+    )
+
+
 def test_empty_protocol_hooks_block_until_reset(tmp_path, platform_type):
     project_dir = generate(tmp_path, platform_type, aip_core=True)
     driver = read(project_dir, "env/agents/axi_agent/src/axi_drv.sv")
     monitor = read(project_dir, "env/agents/axi_agent/src/axi_mon.sv")
 
-    assert driver.count("@(negedge m_vif.rst_n);") >= 3
-    assert "AXI_DRV_PLACEHOLDER" in driver
-    assert "AXI_MON_PLACEHOLDER" in monitor
-    assert "@(negedge m_vif.rst_n);" in monitor
+    for name in ("master_drive", "slave_drive"):
+        body = task_body(driver, name)
+        assert "AXI_DRV_PLACEHOLDER" in body
+        assert "@(negedge m_vif.rst_n);" in strip_sv_comments(body)
+
+    monitor_body = task_body(monitor, "mon_transaction")
+    assert "AXI_MON_PLACEHOLDER" in monitor_body
+    assert "@(negedge m_vif.rst_n);" in strip_sv_comments(monitor_body)
 
 
 def test_reset_finishes_deasserted(tmp_path, platform_type):
     project_dir = generate(tmp_path, platform_type, aip_core=True)
     base_test = read(project_dir, "tc/tc_base.sv")
 
-    assert_in_order(
-        base_test,
-        "harness.rst_n = 1'b0;",
-        "i = $urandom_range",
-        "repeat(i) @(posedge harness.clk);",
-        "harness.rst_n = 1'b1;",
-        "repeat(2) @(posedge harness.clk);",
-        "phase.drop_objection(this);",
+    reset_body = strip_sv_comments(task_body(base_test, "reset_phase"))
+    before_drop, drop_objection, _ = reset_body.partition(
+        "phase.drop_objection(this);"
     )
+    assert drop_objection
+    assignments = list(
+        re.finditer(r"\bharness\.rst_n\s*=\s*([^;]+);", before_drop)
+    )
+    assert assignments
+    assert any(match.group(1).strip() == "1'b0" for match in assignments)
+    assert "i = $urandom_range" in before_drop
+    assert "repeat(i) @(posedge harness.clk);" in before_drop
+    last_assignment = assignments[-1]
+    assert last_assignment.group(1).strip() == "1'b1"
+    release_offset = last_assignment.end()
+    assert "repeat(2) @(posedge harness.clk);" in before_drop[release_offset:]
 
 
 def test_aip_activity_is_command_owned(tmp_path, platform_type):
@@ -69,13 +102,26 @@ def test_aip_activity_is_command_owned(tmp_path, platform_type):
     base_sequence = read(
         project_dir, "env/agents/axi_agent/src/axi_base_seq.sv"
     )
+    monitor = read(project_dir, "env/agents/axi_agent/src/axi_mon.sv")
     environment = read(project_dir, "env/top_env.sv")
 
-    assert "virtual task send_trans" in base_sequence
-    assert "virtual task send_trans_with_rsp" in base_sequence
-    assert base_sequence.count("aip_activity::tick();") == 2
-    assert "aip_activity_subscriber" not in environment
-    assert "m_axi_act_sub" not in environment
+    tick = "aip_activity::tick();"
+    send_trans = strip_sv_comments(task_body(base_sequence, "send_trans"))
+    send_trans_with_rsp = strip_sv_comments(
+        task_body(base_sequence, "send_trans_with_rsp")
+    )
+
+    assert send_trans.count(tick) == 1
+    assert_in_order(send_trans, "finish_item(tr);", tick)
+    assert send_trans_with_rsp.count(tick) == 1
+    assert_in_order(send_trans_with_rsp, "get_response(rsp);", tick)
+
+    executable_monitor = strip_sv_comments(monitor)
+    executable_environment = strip_sv_comments(environment)
+    assert tick not in executable_monitor
+    assert tick not in executable_environment
+    assert "aip_activity_subscriber" not in executable_environment
+    assert "m_axi_act_sub" not in executable_environment
 
 
 def test_activity_subscriber_is_explicit_opt_in(tmp_path, platform_type):
@@ -84,14 +130,18 @@ def test_activity_subscriber_is_explicit_opt_in(tmp_path, platform_type):
 
     assert "EXPLICIT OPT-IN" in subscriber
     assert "mask a stuck AIP command" in subscriber
-    assert "aip_activity::tick();" in subscriber
+    assert "aip_activity::tick();" in strip_sv_comments(subscriber)
 
 
 def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):
     project_dir = generate(tmp_path, platform_type, aip_core=True)
     tcl_demo = read(project_dir, "tc/tcl/tc_tcl_demo.tcl")
 
-    assert "./simv -ucli -i ../tc/tcl/tc_tcl_demo.tcl" in tcl_demo
+    assert (
+        "./simv -ucli -i ../tc/tcl/tc_tcl_demo.tcl "
+        "+UVM_TESTNAME=tc_tcl"
+    ) in tcl_demo
+    assert "-do" not in tcl_demo
     assert "end_test idle=1us timeout=10us" in tcl_demo
 
 
@@ -104,8 +154,7 @@ def test_non_aip_output_excludes_aip_integration(tmp_path, platform_type):
         if path.is_file()
     )
 
-    for forbidden in ("aip_activity", "aip_tcl_bridge", "aip_core_pkg.sv"):
-        assert forbidden not in generated_text
+    assert "aip_" not in generated_text
     assert not (project_dir / "tc" / "tc_tcl.sv").exists()
 
 
@@ -114,4 +163,6 @@ def test_aip_tb_file_keeps_core_package_entries(tmp_path, platform_type):
     tb_file = read(project_dir, "cfg/tb.f")
 
     assert "+incdir+$AIP_CORE_HOME" in tb_file
-    assert "$AIP_CORE_HOME/aip_core_pkg.sv" in tb_file
+    assert tb_file.splitlines().count("$AIP_CORE_HOME/aip_core_pkg.sv") == 1
+    assert tb_file.count("aip_core_pkg.sv") == 1
+    assert not list(project_dir.rglob("aip_core_pkg.sv"))
