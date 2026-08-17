@@ -88,6 +88,269 @@ def assert_positions_in_order(body: str, checks) -> None:
     )
 
 
+def assert_diagnostic_history_contract(core: str) -> None:
+    diagnostic_declaration = re.search(
+        r"(?m)^[ \t]*protected\s+longint\s+unsigned\s+"
+        r"m_diagnostic_warnings\s*;",
+        core,
+    )
+    overflow_declaration = re.search(
+        r"(?m)^[ \t]*protected\s+longint\s+unsigned\s+m_overflows\s*;",
+        core,
+    )
+    assert diagnostic_declaration and overflow_declaration
+    assert overflow_declaration.start() < diagnostic_declaration.start(), (
+        "global diagnostic history must be declared beside cumulative counters"
+    )
+
+    actual_push = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::push_actual\s*\([^;]+\)",
+        "push_actual",
+    )
+    strict_branch = re.search(
+        r"(?ms)if\s*\(\s*m_cfg\.m_strict_arrival\s*&&\s*"
+        r"\(\s*state\.expected_q\.size\s*\(\s*\)\s*==\s*0\s*\)\s*\)\s*"
+        r"begin(?P<body>.*?)^[ \t]*end",
+        actual_push,
+    )
+    assert strict_branch, "missing strict-arrival diagnostic branch"
+    strict_body = strict_branch.group("body")
+    assert_positions_in_order(
+        strict_body,
+        [
+            ("global diagnostic increment", r"m_diagnostic_warnings\s*\+\+\s*;"),
+            ("stream diagnostic increment", r"state\.diagnostic_warnings\s*\+\+\s*;"),
+            ("one-time warning guard", r"if\s*\(\s*!\s*m_strict_arrival_warned\s*\)"),
+        ],
+    )
+
+    status = core_method_body(
+        core,
+        r"function\s+scb_status_e\s+common_uvm_scb::get_status\s*\(\s*\)",
+        "get_status",
+    )
+    assert_positions_in_order(
+        status,
+        [
+            (
+                "global failure",
+                r"m_mismatches\s*\+\s*m_unexpected_actuals\s*\+\s*m_overflows.*?"
+                r"return\s+SCB_FAIL\s*;",
+            ),
+            (
+                "persistent global warning",
+                r"m_allowed_drops\s*\+\s*m_diagnostic_warnings.*?"
+                r"return\s+SCB_WARN\s*;",
+            ),
+            ("global pass", r"return\s+SCB_PASS\s*;"),
+        ],
+    )
+    assert not re.search(r"foreach\s*\(\s*m_streams", status), (
+        "get_status must be O(1) and independent of deletable stream state"
+    )
+
+    reset = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::reset_state\s*\(\s*"
+        r"bit\s+clear_counters\s*=\s*1\s*\)",
+        "reset_state",
+    )
+    clear_guard = re.search(r"if\s*\(\s*clear_counters\s*\)\s*begin", reset)
+    diagnostic_reset = list(
+        re.finditer(r"m_diagnostic_warnings\s*=\s*0\s*;", reset)
+    )
+    assert clear_guard and len(diagnostic_reset) == 1
+    assert clear_guard.start() < diagnostic_reset[0].start(), (
+        "reset_state(0) must preserve global diagnostic warning history"
+    )
+
+    # Task 9 runtime obligations:
+    # 1. strict actual-first -> reset_state(0) stays WARN and is_clean() is false.
+    # 2. strict actual-first -> reset_state(1) becomes PASS/clean absent other history.
+
+
+def assert_bounded_report_contract(core: str) -> None:
+    report = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::print_report\s*\(\s*"
+        r"int\s+limit\s*=\s*-2\s*\)",
+        "print_report",
+    )
+    assert re.search(
+        r"string\s+headers\s*\[\$\]\s*=\s*'\{\s*\"Status\"\s*,\s*"
+        r"\"Stream\"\s*,\s*\"Match\"\s*,\s*\"Mismatch\"\s*,\s*"
+        r"\"Drop\"\s*,\s*\"Unexpected\"\s*,\s*\"PendExp\"\s*,\s*"
+        r"\"PendAct\"\s*,\s*\"Overflow\"\s*,\s*\"Peak\"\s*\}\s*;",
+        report,
+    ), "print_report must retain the exact ten headers"
+    assert re.search(
+        r"bit\s+numeric\s*\[\$\]\s*=\s*'\{\s*0\s*,\s*0\s*,\s*1\s*,\s*"
+        r"1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*\}\s*;",
+        report,
+    ), "print_report must retain exact numeric metadata"
+    assert re.search(
+        r"longint\s+unsigned\s+total_problem\s*=\s*0\s*;",
+        report,
+    ), "print_report must count all problem streams independently of retained rows"
+    assert re.search(
+        r"foreach\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)\s*begin\s*"
+        r"common_scb_problem_row\s+row\s*;\s*int\s+insert_at\s*;\s*"
+        r"bit\s+retain_row\s*;\s*row\s*=\s*make_row",
+        report,
+    ), "report loop locals must precede statements for VCS portability"
+    assert_positions_in_order(
+        report,
+        [
+            (
+                "configured limit selection",
+                r"effective_limit\s*=\s*\(\s*limit\s*==\s*-2\s*\)\s*\?\s*"
+                r"m_cfg\.m_report_limit\s*:\s*limit\s*;",
+            ),
+            (
+                "invalid direct-limit fallback",
+                r"if\s*\(\s*effective_limit\s*<\s*-1\s*\).*?"
+                r"invalid report limit=%0d; using configured limit=%0d.*?"
+                r"effective_limit\s*=\s*m_cfg\.m_report_limit\s*;",
+            ),
+            (
+                "problem-row filter",
+                r"row\s*=\s*make_row\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)\s*;\s*"
+                r"if\s*\(\s*row\.issue_count\s*!=\s*0\s*\)",
+            ),
+            ("total problem count", r"total_problem\s*\+\+\s*;"),
+            (
+                "all-row collection",
+                r"if\s*\(\s*effective_limit\s*==\s*-1\s*\)\s*"
+                r"rows\.push_back\s*\(\s*row\s*\)\s*;",
+            ),
+            (
+                "positive finite-limit gate",
+                r"else\s+if\s*\(\s*effective_limit\s*>\s*0\s*\)\s*begin",
+            ),
+            (
+                "available finite slot",
+                r"retain_row\s*=\s*\(\s*rows\.size\s*\(\s*\)\s*<\s*"
+                r"effective_limit\s*\)\s*;",
+            ),
+            (
+                "full-queue quality check",
+                r"if\s*\(\s*!\s*retain_row\s*\)\s*retain_row\s*=\s*"
+                r"row_before\s*\(\s*row\s*,\s*rows\s*\[\s*rows\.size\s*\(\s*\)"
+                r"\s*-\s*1\s*\]\s*\)\s*;",
+            ),
+            (
+                "retained finite row gate",
+                r"if\s*\(\s*retain_row\s*\)\s*begin",
+            ),
+            (
+                "bounded sorted insertion",
+                r"insert_at\s*=\s*rows\.size\s*\(\s*\)\s*;.*?"
+                r"if\s*\(\s*row_before\s*\(\s*row\s*,\s*rows\s*\[\s*i\s*\]\s*\)\s*\).*?"
+                r"insert_at\s*=\s*i\s*;.*?break\s*;.*?"
+                r"rows\.insert\s*\(\s*insert_at\s*,\s*row\s*\)\s*;",
+            ),
+            (
+                "finite queue trim",
+                r"if\s*\(\s*rows\.size\s*\(\s*\)\s*>\s*effective_limit\s*\)\s*"
+                r"void'\s*\(\s*rows\.pop_back\s*\(\s*\)\s*\)\s*;",
+            ),
+            (
+                "all-row native sort",
+                r"if\s*\(\s*effective_limit\s*==\s*-1\s*\)\s*"
+                r"rows\.rsort\s*\(\s*\)\s+with\s*\(\s*\{\s*item\.status\s*,\s*"
+                r"item\.issue_count\s*,\s*~\s*item\.stream_id\s*\}\s*\)\s*;",
+            ),
+            ("retained row count", r"shown\s*=\s*rows\.size\s*\(\s*\)\s*;"),
+            (
+                "independent omitted count",
+                r"omitted\s*=\s*total_problem\s*-\s*shown\s*;",
+            ),
+            (
+                "summary info",
+                r"`uvm_info\s*\(\s*\"SCB_REPORT\"\s*,\s*get_summary\s*\(\s*\)",
+            ),
+            (
+                "problem count info",
+                r"Problem streams: total=%0d shown=%0d omitted=%0d",
+            ),
+            (
+                "conditional table",
+                r"if\s*\(\s*shown\s*!=\s*0\s*\)\s*begin\s*"
+                r"reporter\.set_columns\s*\(\s*headers\s*,\s*numeric\s*\)\s*;.*?"
+                r"for\s*\(\s*int\s+i\s*=\s*0\s*;\s*i\s*<\s*shown\s*;\s*"
+                r"i\+\+\s*\)\s*reporter\.add_row\s*\(\s*rows\s*\[\s*i\s*\]"
+                r"\.cells\s*\)\s*;.*?reporter\.render\s*\(\s*\)",
+            ),
+        ],
+    )
+    assert re.search(
+        r"Problem streams: total=%0d shown=%0d omitted=%0d.*?"
+        r"total_problem\s*,\s*shown\s*,\s*omitted",
+        report,
+        flags=re.DOTALL,
+    ), "report totals must use all problem streams, not retained-row count"
+    assert len(re.findall(r"rows\.push_back\s*\(", report)) == 1
+    assert len(re.findall(r"rows\.insert\s*\(", report)) == 1
+    assert "normal streams" not in report.lower()
+
+
+def assert_final_status_idempotence_contract(core: str) -> None:
+    assert re.search(
+        r"(?m)^[ \t]*protected\s+bit\s+m_final_status_reported\s*;",
+        core,
+    ), "missing final-status epoch guard"
+    check = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::check_phase\s*\(\s*"
+        r"uvm_phase\s+phase\s*\)",
+        "check_phase",
+    )
+    assert_positions_in_order(
+        check,
+        [
+            ("parent check", r"super\.check_phase\s*\(\s*phase\s*\)\s*;"),
+            ("pending finalization", r"finalize_pending\s*\(\s*\)\s*;"),
+            (
+                "final-status guard",
+                r"if\s*\(\s*!\s*m_final_status_reported\s*\)\s*begin",
+            ),
+            ("final status case", r"case\s*\(\s*get_status\s*\(\s*\)\s*\)"),
+            (
+                "failure message",
+                r"SCB_FAIL\s*:\s*`uvm_error\s*\(\s*\"SCB_FINAL\"\s*,\s*"
+                r"get_summary\s*\(\s*\)\s*\)",
+            ),
+            (
+                "warning message",
+                r"SCB_WARN\s*:\s*`uvm_warning\s*\(\s*\"SCB_FINAL\"\s*,\s*"
+                r"get_summary\s*\(\s*\)\s*\)",
+            ),
+            (
+                "pass message",
+                r"default\s*:\s*`uvm_info\s*\(\s*\"SCB_FINAL\"\s*,\s*"
+                r"get_summary\s*\(\s*\)\s*,\s*UVM_LOW\s*\)",
+            ),
+            (
+                "reported marker",
+                r"m_final_status_reported\s*=\s*1\s*;",
+            ),
+        ],
+    )
+    reset = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::reset_state\s*\(\s*"
+        r"bit\s+clear_counters\s*=\s*1\s*\)",
+        "reset_state",
+    )
+    assert re.search(r"m_final_status_reported\s*=\s*0\s*;", reset), (
+        "reset_state must begin a new final-status reporting epoch"
+    )
+
+    # Task 9 runtime obligation: two check_phase calls emit SCB_FINAL once;
+    # reset_state starts a new epoch that may emit one new final status.
+
+
 def assert_task6_lifecycle_report_contract(core: str) -> None:
     declarations = {
         "control proxy member": (
@@ -171,32 +434,7 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
         ],
     )
 
-    status = core_method_body(
-        core,
-        r"function\s+scb_status_e\s+common_uvm_scb::get_status\s*\(\s*\)",
-        "get_status",
-    )
-    assert_positions_in_order(
-        status,
-        [
-            ("diagnostic accumulator", r"longint\s+unsigned\s+diagnostics\s*=\s*0\s*;"),
-            (
-                "diagnostic sum",
-                r"foreach\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)\s*"
-                r"diagnostics\s*\+=\s*m_streams\s*\[\s*id\s*\]\.diagnostic_warnings\s*;",
-            ),
-            (
-                "global failure",
-                r"m_mismatches\s*\+\s*m_unexpected_actuals\s*\+\s*m_overflows.*?"
-                r"return\s+SCB_FAIL\s*;",
-            ),
-            (
-                "global warning",
-                r"m_allowed_drops\s*\+\s*diagnostics.*?return\s+SCB_WARN\s*;",
-            ),
-            ("global pass", r"return\s+SCB_PASS\s*;"),
-        ],
-    )
+    assert_diagnostic_history_contract(core)
 
     clean = core_method_body(
         core,
@@ -244,69 +482,7 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
         summary,
     ), "get_summary must not rely on adjacent string literals"
 
-    report = core_method_body(
-        core,
-        r"function\s+void\s+common_uvm_scb::print_report\s*\(\s*int\s+limit\s*=\s*-2\s*\)",
-        "print_report",
-    )
-    assert re.search(
-        r"string\s+headers\s*\[\$\]\s*=\s*'\{\s*\"Status\"\s*,\s*\"Stream\"\s*,\s*"
-        r"\"Match\"\s*,\s*\"Mismatch\"\s*,\s*\"Drop\"\s*,\s*\"Unexpected\"\s*,\s*"
-        r"\"PendExp\"\s*,\s*\"PendAct\"\s*,\s*\"Overflow\"\s*,\s*\"Peak\"\s*\}\s*;",
-        report,
-    ), "print_report must define the exact ten headers"
-    assert re.search(
-        r"bit\s+numeric\s*\[\$\]\s*=\s*'\{\s*0\s*,\s*0\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*,\s*1\s*\}\s*;",
-        report,
-    ), "print_report must define exact numeric-column metadata"
-    assert_positions_in_order(
-        report,
-        [
-            (
-                "configured limit selection",
-                r"effective_limit\s*=\s*\(\s*limit\s*==\s*-2\s*\)\s*\?\s*"
-                r"m_cfg\.m_report_limit\s*:\s*limit\s*;",
-            ),
-            (
-                "invalid limit fallback",
-                r"if\s*\(\s*effective_limit\s*<\s*-1\s*\).*?"
-                r"invalid report limit=%0d; using configured limit=%0d.*?"
-                r"effective_limit\s*=\s*m_cfg\.m_report_limit\s*;",
-            ),
-            (
-                "problem-row filter",
-                r"row\s*=\s*make_row\s*\(\s*m_streams\s*\[\s*id\s*\]\s*\)\s*;\s*"
-                r"if\s*\(\s*row\.issue_count\s*!=\s*0\s*\)",
-            ),
-            (
-                "stable insertion point",
-                r"int\s+insert_at\s*=\s*rows\.size\s*\(\s*\)\s*;.*?"
-                r"if\s*\(\s*row_before\s*\(\s*row\s*,\s*rows\s*\[\s*i\s*\]\s*\)\s*\).*?"
-                r"insert_at\s*=\s*i\s*;.*?break\s*;.*?rows\.insert\s*\(\s*insert_at\s*,\s*row\s*\)\s*;",
-            ),
-            (
-                "all-or-top-N shown count",
-                r"shown\s*=\s*\(\s*effective_limit\s*==\s*-1\s*\)\s*\?\s*rows\.size\s*\(\s*\)\s*"
-                r":\s*\(\s*\(\s*effective_limit\s*<\s*rows\.size\s*\(\s*\)\s*\)\s*\?\s*"
-                r"effective_limit\s*:\s*rows\.size\s*\(\s*\)\s*\)\s*;",
-            ),
-            ("omitted count", r"omitted\s*=\s*rows\.size\s*\(\s*\)\s*-\s*shown\s*;"),
-            ("summary info", r"`uvm_info\s*\(\s*\"SCB_REPORT\"\s*,\s*get_summary\s*\(\s*\)"),
-            (
-                "problem-count info",
-                r"Problem streams: total=%0d shown=%0d omitted=%0d",
-            ),
-            (
-                "conditional table",
-                r"if\s*\(\s*shown\s*!=\s*0\s*\)\s*begin\s*"
-                r"reporter\.set_columns\s*\(\s*headers\s*,\s*numeric\s*\)\s*;.*?"
-                r"for\s*\(\s*int\s+i\s*=\s*0\s*;\s*i\s*<\s*shown\s*;\s*i\+\+\s*\)\s*"
-                r"reporter\.add_row\s*\(\s*rows\s*\[\s*i\s*\]\.cells\s*\)\s*;.*?"
-                r"reporter\.render\s*\(\s*\)",
-            ),
-        ],
-    )
-    assert "normal streams" not in report.lower()
+    assert_bounded_report_contract(core)
 
     finalize = core_method_body(
         core,
@@ -340,22 +516,7 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
         ],
     )
 
-    check = core_method_body(
-        core,
-        r"function\s+void\s+common_uvm_scb::check_phase\s*\(\s*uvm_phase\s+phase\s*\)",
-        "check_phase",
-    )
-    assert_positions_in_order(
-        check,
-        [
-            ("parent check", r"super\.check_phase\s*\(\s*phase\s*\)\s*;"),
-            ("pending finalization", r"finalize_pending\s*\(\s*\)\s*;"),
-            ("final status case", r"case\s*\(\s*get_status\s*\(\s*\)\s*\)"),
-            ("failure message", r"SCB_FAIL\s*:\s*`uvm_error\s*\(\s*\"SCB_FINAL\"\s*,\s*get_summary\s*\(\s*\)\s*\)"),
-            ("warning message", r"SCB_WARN\s*:\s*`uvm_warning\s*\(\s*\"SCB_FINAL\"\s*,\s*get_summary\s*\(\s*\)\s*\)"),
-            ("pass message", r"default\s*:\s*`uvm_info\s*\(\s*\"SCB_FINAL\"\s*,\s*get_summary\s*\(\s*\)\s*,\s*UVM_LOW\s*\)"),
-        ],
-    )
+    assert_final_status_idempotence_contract(core)
 
     report_phase = core_method_body(
         core,
@@ -388,6 +549,7 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
         [
             ("stream deletion", r"m_streams\.delete\s*\(\s*\)\s*;"),
             ("finalized reset", r"m_finalized\s*=\s*0\s*;"),
+            ("final status reset", r"m_final_status_reported\s*=\s*0\s*;"),
             ("strict warning reset", r"m_strict_arrival_warned\s*=\s*0\s*;"),
             ("unconditional current gauge reset", r"m_current_pending\s*=\s*0\s*;"),
             ("cumulative counter guard", r"if\s*\(\s*clear_counters\s*\)\s*begin"),
@@ -398,6 +560,10 @@ def assert_task6_lifecycle_report_contract(core: str) -> None:
             ("drops reset", r"m_allowed_drops\s*=\s*0\s*;"),
             ("unexpected reset", r"m_unexpected_actuals\s*=\s*0\s*;"),
             ("overflows reset", r"m_overflows\s*=\s*0\s*;"),
+            (
+                "diagnostic warnings reset",
+                r"m_diagnostic_warnings\s*=\s*0\s*;",
+            ),
             ("peak reset", r"m_peak_pending\s*=\s*0\s*;"),
             ("detail reset", r"m_detail_emitted\s*=\s*0\s*;"),
             ("suppressed reset", r"m_suppressed_details\s*=\s*0\s*;"),
@@ -545,6 +711,21 @@ def test_vcs_portability_avoids_reserved_matches_identifier():
     assert_vcs_portable_match_counter(types_raw, core_raw)
 
 
+def test_task6_preserves_diagnostic_warning_history_across_counter_epochs():
+    core_raw, _ = render_task6_sources()
+    assert_diagnostic_history_contract(strip_sv_comments(core_raw))
+
+
+def test_task6_bounds_finite_reports_and_natively_sorts_all_rows():
+    core_raw, _ = render_task6_sources()
+    assert_bounded_report_contract(strip_sv_comments(core_raw))
+
+
+def test_task6_emits_final_status_once_per_reset_epoch():
+    core_raw, _ = render_task6_sources()
+    assert_final_status_idempotence_contract(strip_sv_comments(core_raw))
+
+
 def assert_core_contract(core_raw: str) -> None:
     core = strip_sv_comments(core_raw)
 
@@ -651,6 +832,7 @@ def assert_core_contract(core_raw: str) -> None:
         "allowed_drops",
         "unexpected_actuals",
         "overflows",
+        "diagnostic_warnings",
         "current_pending",
         "peak_pending",
         "detail_emitted",
@@ -916,7 +1098,11 @@ def assert_core_contract(core_raw: str) -> None:
                 "strict-arrival condition",
                 r"if\s*\(\s*m_cfg\.m_strict_arrival\s*&&\s*\(\s*state\.expected_q\.size\s*\(\s*\)\s*==\s*0\s*\)\s*\)",
             ),
-            ("per-occurrence diagnostic", r"state\.diagnostic_warnings\s*\+\+\s*;"),
+            (
+                "global per-occurrence diagnostic",
+                r"m_diagnostic_warnings\s*\+\+\s*;",
+            ),
+            ("stream per-occurrence diagnostic", r"state\.diagnostic_warnings\s*\+\+\s*;"),
             ("global warning guard", r"if\s*\(\s*!\s*m_strict_arrival_warned\s*\)"),
             ("strict warning", r"SCB_ACTUAL_FIRST"),
             ("actual retained copy", r"retained_copy\s*\(\s*tr\s*,\s*stream_id\s*,\s*\"actual\""),
@@ -1391,6 +1577,47 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
             assert_core_contract(broken)
 
     task_six_mutations = {
+        "missing global diagnostic history": (
+            r"(?m)^[ \t]*protected longint unsigned m_diagnostic_warnings;[ \t]*$",
+            "",
+        ),
+        "diagnostic history cleared unconditionally": (
+            r"(?s)(m_current_pending = 0;)\s*"
+            r"(if \(clear_counters\) begin.*?)"
+            r"m_diagnostic_warnings = 0;",
+            r"\1\n    m_diagnostic_warnings = 0;\n    \2",
+        ),
+        "limit zero retains rows": (
+            r"else if \(effective_limit > 0\) begin",
+            "else if (effective_limit >= 0) begin",
+        ),
+        "finite report retains every problem row": (
+            r"(?s)else if \(effective_limit > 0\) begin.*?"
+            r"(?=\n        end\n    end\n    if \(effective_limit == -1\))",
+            "else if (effective_limit > 0)\n"
+            "                rows.push_back(row);",
+        ),
+        "all-row mode uses quadratic insertion": (
+            r"if \(effective_limit == -1\)\s*rows\.push_back\(row\);",
+            "if (effective_limit == -1) begin\n"
+            "                insert_at = rows.size();\n"
+            "                foreach (rows[i]) begin\n"
+            "                    if (row_before(row, rows[i])) begin\n"
+            "                        insert_at = i;\n"
+            "                        break;\n"
+            "                    end\n"
+            "                end\n"
+            "                rows.insert(insert_at, row);\n"
+            "            end",
+        ),
+        "omitted count uses retained rows": (
+            r"omitted = total_problem - shown;",
+            "omitted = rows.size() - shown;",
+        ),
+        "missing final-status guard": (
+            r"if \(!m_final_status_reported\) begin",
+            "begin",
+        ),
         "adjacent summary string literals": (
             r"(?s)\$sformatf\s*\(\s*\{\s*"
             r'"status=%s expected=%0d actual=%0d match=%0d mismatch=%0d "\s*,\s*'
@@ -1433,11 +1660,6 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
         "report includes normal rows": (
             r"if \(row\.issue_count != 0\) begin",
             "if (row.issue_count >= 0) begin",
-        ),
-        "top-N ignored": (
-            r"(?s)shown = \(effective_limit == -1\) \? rows\.size\(\)\s*"
-            r": \(\(effective_limit < rows\.size\(\)\) \? effective_limit : rows\.size\(\)\);",
-            "shown = rows.size();",
         ),
         "descending stream tie break": (
             r"return left\.stream_id < right\.stream_id;",

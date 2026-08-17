@@ -22,12 +22,14 @@ class common_uvm_scb #(type TRANS_TYPE,
     protected longint unsigned m_allowed_drops;
     protected longint unsigned m_unexpected_actuals;
     protected longint unsigned m_overflows;
+    protected longint unsigned m_diagnostic_warnings;
     protected longint unsigned m_current_pending;
     protected longint unsigned m_peak_pending;
     protected longint unsigned m_detail_emitted;
     protected longint unsigned m_suppressed_details;
     protected bit m_strict_arrival_warned;
     protected bit m_finalized;
+    protected bit m_final_status_reported;
 
     extern function new(string name="common_uvm_scb", uvm_component parent=null);
     extern virtual function void build_phase(uvm_phase phase);
@@ -279,6 +281,7 @@ function void common_uvm_scb::push_actual(TRANS_TYPE tr,
     m_actual_inputs++;
     state.actual_inputs++;
     if (m_cfg.m_strict_arrival && (state.expected_q.size() == 0)) begin
+        m_diagnostic_warnings++;
         state.diagnostic_warnings++;
         if (!m_strict_arrival_warned) begin
             `uvm_warning("SCB_ACTUAL_FIRST",
@@ -516,11 +519,9 @@ function common_scb_problem_row common_uvm_scb::make_row(state_t state);
 endfunction
 
 function scb_status_e common_uvm_scb::get_status();
-    longint unsigned diagnostics = 0;
-    foreach (m_streams[id]) diagnostics += m_streams[id].diagnostic_warnings;
     if ((m_mismatches + m_unexpected_actuals + m_overflows) != 0)
         return SCB_FAIL;
-    if ((m_allowed_drops + diagnostics) != 0) return SCB_WARN;
+    if ((m_allowed_drops + m_diagnostic_warnings) != 0) return SCB_WARN;
     return SCB_PASS;
 endfunction
 
@@ -558,6 +559,7 @@ function void common_uvm_scb::print_report(int limit=-2);
     int effective_limit;
     int shown;
     int omitted;
+    longint unsigned total_problem = 0;
 
     effective_limit = (limit == -2) ? m_cfg.m_report_limit : limit;
     if (effective_limit < -1) begin
@@ -567,25 +569,41 @@ function void common_uvm_scb::print_report(int limit=-2);
         effective_limit = m_cfg.m_report_limit;
     end
     foreach (m_streams[id]) begin
-        common_scb_problem_row row = make_row(m_streams[id]);
+        common_scb_problem_row row;
+        int insert_at;
+        bit retain_row;
+        row = make_row(m_streams[id]);
         if (row.issue_count != 0) begin
-            int insert_at = rows.size();
-            foreach (rows[i]) begin
-                if (row_before(row, rows[i])) begin
-                    insert_at = i;
-                    break;
+            total_problem++;
+            if (effective_limit == -1)
+                rows.push_back(row);
+            else if (effective_limit > 0) begin
+                retain_row = (rows.size() < effective_limit);
+                if (!retain_row)
+                    retain_row = row_before(row, rows[rows.size()-1]);
+                if (retain_row) begin
+                    insert_at = rows.size();
+                    foreach (rows[i]) begin
+                        if (row_before(row, rows[i])) begin
+                            insert_at = i;
+                            break;
+                        end
+                    end
+                    rows.insert(insert_at, row);
+                    if (rows.size() > effective_limit)
+                        void'(rows.pop_back());
                 end
             end
-            rows.insert(insert_at, row);
         end
     end
-    shown = (effective_limit == -1) ? rows.size()
-          : ((effective_limit < rows.size()) ? effective_limit : rows.size());
-    omitted = rows.size() - shown;
+    if (effective_limit == -1)
+        rows.rsort() with ({item.status, item.issue_count, ~item.stream_id});
+    shown = rows.size();
+    omitted = total_problem - shown;
     `uvm_info("SCB_REPORT", get_summary(), UVM_NONE)
     `uvm_info("SCB_REPORT",
               $sformatf("Problem streams: total=%0d shown=%0d omitted=%0d",
-                        rows.size(), shown, omitted), UVM_NONE)
+                        total_problem, shown, omitted), UVM_NONE)
     if (shown != 0) begin
         reporter.set_columns(headers, numeric);
         for (int i=0; i<shown; i++) reporter.add_row(rows[i].cells);
@@ -615,11 +633,14 @@ endfunction
 function void common_uvm_scb::check_phase(uvm_phase phase);
     super.check_phase(phase);
     finalize_pending();
-    case (get_status())
-        SCB_FAIL: `uvm_error("SCB_FINAL", get_summary())
-        SCB_WARN: `uvm_warning("SCB_FINAL", get_summary())
-        default:  `uvm_info("SCB_FINAL", get_summary(), UVM_LOW)
-    endcase
+    if (!m_final_status_reported) begin
+        case (get_status())
+            SCB_FAIL: `uvm_error("SCB_FINAL", get_summary())
+            SCB_WARN: `uvm_warning("SCB_FINAL", get_summary())
+            default:  `uvm_info("SCB_FINAL", get_summary(), UVM_LOW)
+        endcase
+        m_final_status_reported = 1;
+    end
 endfunction
 
 function void common_uvm_scb::report_phase(uvm_phase phase);
@@ -634,6 +655,7 @@ endfunction
 function void common_uvm_scb::reset_state(bit clear_counters=1);
     m_streams.delete();
     m_finalized = 0;
+    m_final_status_reported = 0;
     m_strict_arrival_warned = 0;
     m_current_pending = 0;
     if (clear_counters) begin
@@ -644,6 +666,7 @@ function void common_uvm_scb::reset_state(bit clear_counters=1);
         m_allowed_drops = 0;
         m_unexpected_actuals = 0;
         m_overflows = 0;
+        m_diagnostic_warnings = 0;
         m_peak_pending = 0;
         m_detail_emitted = 0;
         m_suppressed_details = 0;
