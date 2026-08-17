@@ -13,16 +13,21 @@ class common_scb_reporter;
     common_scb_report_row m_rows[$];
 
     function void set_columns(input string headers[$], input bit numeric[$]);
+        m_headers.delete();
+        m_numeric.delete();
+        m_widths.delete();
+        m_rows.delete();
+        if (headers.size() == 0 || headers.size() != numeric.size())
+            return;
         m_headers = headers;
         m_numeric = numeric;
-        m_widths.delete();
         foreach (m_headers[i]) m_widths.push_back(m_headers[i].len());
     endfunction
 
     function void add_row(input string cells[$]);
-        common_scb_report_row row = new();
-        if (cells.size() != m_headers.size())
+        if (m_headers.size() == 0 || cells.size() != m_headers.size())
             return;
+        common_scb_report_row row = new();
         row.cells = cells;
         foreach (cells[i])
             if (cells[i].len() > m_widths[i]) m_widths[i] = cells[i].len();
@@ -56,7 +61,9 @@ class common_scb_reporter;
 
     function string render();
         string text;
+        if (m_headers.size() == 0) return "";
         text = {border(), "\n", render_cells(m_headers), "\n", border()};
+        if (m_rows.size() == 0) return text;
         foreach (m_rows[i]) text = {text, "\n", render_cells(m_rows[i].cells)};
         return {text, "\n", border()};
     endfunction

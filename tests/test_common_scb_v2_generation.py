@@ -179,17 +179,30 @@ def test_v2_types_expose_approved_defaults(tmp_path, platform_type):
     assert types_path.is_file(), "missing generated v2 types contract file"
 
     types = strip_sv_comments(read(project, "common/common_scb_types.sv"))
-    for declaration in [
-        "SCB_ORDERED_EXACT",
-        "SCB_ORDERED_LOSSY",
-        "SCB_UNORDERED",
-        "m_report_limit = 10",
-        "m_err_limit = 10",
-        "m_pending_limit = 0",
-        "m_clone_en = 1",
-        "m_strict_arrival = 0",
-    ]:
-        assert declaration in types, f"missing v2 types declaration: {declaration}"
+    declarations = {
+        "comparison-mode enum": (
+            r"(?ms)^[ \t]*typedef\s+enum\s+int\s*\{\s*"
+            r"SCB_ORDERED_EXACT\s*,\s*SCB_ORDERED_LOSSY\s*,\s*"
+            r"SCB_UNORDERED\s*\}\s*common_scb_cmp_mode_e\s*;"
+        ),
+        "status enum": (
+            r"(?ms)^[ \t]*typedef\s+enum\s+int\s*\{\s*"
+            r"SCB_PASS\s*,\s*SCB_WARN\s*,\s*SCB_FAIL\s*\}\s*"
+            r"scb_status_e\s*;"
+        ),
+        "comparison-mode default": (
+            r"(?m)^[ \t]*common_scb_cmp_mode_e\s+m_cmp_mode\s*=\s*"
+            r"SCB_UNORDERED\s*;"
+        ),
+        "report-limit default": r"(?m)^[ \t]*int\s+m_report_limit\s*=\s*10\s*;",
+        "error-limit default": r"(?m)^[ \t]*int\s+m_err_limit\s*=\s*10\s*;",
+        "pending-limit default": r"(?m)^[ \t]*int\s+m_pending_limit\s*=\s*0\s*;",
+        "report-enable default": r"(?m)^[ \t]*bit\s+m_report_en\s*=\s*1\s*;",
+        "clone-enable default": r"(?m)^[ \t]*bit\s+m_clone_en\s*=\s*1\s*;",
+        "strict-arrival default": r"(?m)^[ \t]*bit\s+m_strict_arrival\s*=\s*0\s*;",
+    }
+    for description, pattern in declarations.items():
+        assert re.search(pattern, types), f"missing v2 types {description}"
 
 
 def test_reporter_uses_structured_cells_and_per_column_widths(tmp_path, platform_type):
@@ -198,16 +211,128 @@ def test_reporter_uses_structured_cells_and_per_column_widths(tmp_path, platform
     assert reporter_path.is_file(), "missing generated v2 reporter contract file"
 
     reporter = strip_sv_comments(read(project, "common/common_scb_reporter.sv"))
-    for declaration in [
-        "class common_scb_reporter",
-        "string m_headers[$]",
-        "int m_widths[$]",
-        "function void add_row",
-        "function string render",
-    ]:
-        assert declaration in reporter, (
-            f"missing structured reporter declaration: {declaration}"
+    declarations = {
+        "reporter class": r"(?m)^[ \t]*class\s+common_scb_reporter\s*;",
+        "header storage": r"(?m)^[ \t]*string\s+m_headers\s*\[\$\]\s*;",
+        "numeric storage": r"(?m)^[ \t]*bit\s+m_numeric\s*\[\$\]\s*;",
+        "per-column width storage": r"(?m)^[ \t]*int\s+m_widths\s*\[\$\]\s*;",
+        "row storage": (
+            r"(?m)^[ \t]*common_scb_report_row\s+m_rows\s*\[\$\]\s*;"
+        ),
+        "add-row function": (
+            r"(?m)^[ \t]*function\s+void\s+add_row\s*\(\s*input\s+"
+            r"string\s+cells\s*\[\$\]\s*\)\s*;"
+        ),
+        "render function": r"(?m)^[ \t]*function\s+string\s+render\s*\(\s*\)\s*;",
+    }
+    for description, pattern in declarations.items():
+        assert re.search(pattern, reporter), (
+            f"missing structured reporter {description}"
         )
+
+    set_columns = re.search(
+        r"(?ms)^[ \t]*function\s+void\s+set_columns\b.*?;(?P<body>.*?)"
+        r"^[ \t]*endfunction",
+        reporter,
+    )
+    assert set_columns, "missing structured reporter set_columns function"
+    set_columns_body = set_columns.group("body")
+    for state in ("m_headers", "m_numeric", "m_widths", "m_rows"):
+        cleared_state = re.search(
+            rf"(?m)^[ \t]*{state}\.delete\s*\(\s*\)\s*;", set_columns_body
+        )
+        assert cleared_state, (
+            f"set_columns must clear {state} before reuse"
+        )
+        assert cleared_state.start() < set_columns_body.find("if"), (
+            f"set_columns must clear {state} before metadata validation"
+        )
+    assert re.search(
+        r"if\s*\(\s*headers\.size\s*\(\s*\)\s*==\s*0\s*\|\|\s*"
+        r"headers\.size\s*\(\s*\)\s*!=\s*numeric\.size\s*\(\s*\)\s*\)\s*"
+        r"return\s*;",
+        set_columns_body,
+    ), "set_columns must reject empty or mismatched column metadata"
+    assert re.search(r"(?m)^[ \t]*m_headers\s*=\s*headers\s*;", set_columns_body), (
+        "set_columns must copy valid headers"
+    )
+    assert re.search(r"(?m)^[ \t]*m_numeric\s*=\s*numeric\s*;", set_columns_body), (
+        "set_columns must copy valid numeric metadata"
+    )
+    assert re.search(
+        r"foreach\s*\(\s*m_headers\s*\[\s*i\s*\]\s*\)\s*"
+        r"m_widths\.push_back\s*\(\s*m_headers\s*\[\s*i\s*\]\.len\s*\(\s*\)\s*\)\s*;",
+        set_columns_body,
+    ), "set_columns must rebuild widths from valid headers"
+
+    add_row = re.search(
+        r"(?ms)^[ \t]*function\s+void\s+add_row\b.*?;(?P<body>.*?)"
+        r"^[ \t]*endfunction",
+        reporter,
+    )
+    assert add_row, "missing structured reporter add_row function body"
+    add_row_body = add_row.group("body")
+    invalid_row = re.search(
+        r"if\s*\(\s*m_headers\.size\s*\(\s*\)\s*==\s*0\s*\|\|\s*"
+        r"cells\.size\s*\(\s*\)\s*!=\s*m_headers\.size\s*\(\s*\)\s*\)\s*"
+        r"return\s*;",
+        add_row_body,
+    )
+    assert invalid_row, "add_row must reject unconfigured or mismatched rows"
+    row_allocation = re.search(
+        r"common_scb_report_row\s+row\s*=\s*new\s*\(\s*\)\s*;",
+        add_row_body,
+    )
+    assert row_allocation and invalid_row.start() < row_allocation.start(), (
+        "add_row must validate rows before allocating storage"
+    )
+
+    render = re.search(
+        r"(?ms)^[ \t]*function\s+string\s+render\b.*?;(?P<body>.*?)"
+        r"^[ \t]*endfunction",
+        reporter,
+    )
+    assert render, "missing structured reporter render function body"
+    render_body = render.group("body")
+    assert re.search(
+        r'if\s*\(\s*m_headers\.size\s*\(\s*\)\s*==\s*0\s*\)\s*return\s+""\s*;',
+        render_body,
+    ), "render must return an empty string without configured columns"
+    assert re.search(
+        r"if\s*\(\s*m_rows\.size\s*\(\s*\)\s*==\s*0\s*\)\s*return\s+text\s*;",
+        render_body,
+    ), "render must avoid a duplicate closing border when there are no rows"
     assert "insert_line_content" not in reporter, (
         "structured reporter must not use legacy insert_line_content"
+    )
+
+
+def test_v2_contract_regexes_reject_comments_suffixes_and_wrong_defaults():
+    comparison_mode = (
+        r"(?ms)^[ \t]*typedef\s+enum\s+int\s*\{\s*"
+        r"SCB_ORDERED_EXACT\s*,\s*SCB_ORDERED_LOSSY\s*,\s*"
+        r"SCB_UNORDERED\s*\}\s*common_scb_cmp_mode_e\s*;"
+    )
+    report_limit = r"(?m)^[ \t]*int\s+m_report_limit\s*=\s*10\s*;"
+    reporter_class = r"(?m)^[ \t]*class\s+common_scb_reporter\s*;"
+    add_row = (
+        r"(?m)^[ \t]*function\s+void\s+add_row\s*\(\s*input\s+"
+        r"string\s+cells\s*\[\$\]\s*\)\s*;"
+    )
+
+    assert re.search(
+        comparison_mode,
+        "typedef enum int { SCB_ORDERED_EXACT, SCB_ORDERED_LOSSY, "
+        "SCB_UNORDERED } common_scb_cmp_mode_e;",
+    )
+    assert re.search(report_limit, "int m_report_limit = 10;")
+    assert re.search(reporter_class, "class common_scb_reporter;")
+    assert re.search(add_row, "function void add_row(input string cells[$]);")
+    assert not re.search(report_limit, "int m_report_limit = 11;")
+    assert not re.search(reporter_class, "class common_scb_reporter_bad;")
+    assert not re.search(add_row, "function void add_row_extra(input string cells[$]);")
+    assert not re.search(
+        comparison_mode,
+        "// typedef enum int { SCB_ORDERED_EXACT, SCB_ORDERED_LOSSY, "
+        "SCB_UNORDERED } common_scb_cmp_mode_e;",
     )
