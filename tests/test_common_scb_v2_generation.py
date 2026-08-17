@@ -279,12 +279,18 @@ def test_reporter_uses_structured_cells_and_per_column_widths(tmp_path, platform
         add_row_body,
     )
     assert invalid_row, "add_row must reject unconfigured or mismatched rows"
-    row_allocation = re.search(
-        r"common_scb_report_row\s+row\s*=\s*new\s*\(\s*\)\s*;",
+    row_declaration = re.search(
+        r"(?m)^[ \t]*common_scb_report_row\s+row\s*;",
         add_row_body,
     )
-    assert row_allocation and invalid_row.start() < row_allocation.start(), (
-        "add_row must validate rows before allocating storage"
+    assert row_declaration, "add_row must declare the row before executable statements"
+    row_allocation = re.search(
+        r"(?m)^[ \t]*row\s*=\s*new\s*\(\s*\)\s*;",
+        add_row_body,
+    )
+    assert row_allocation, "add_row must allocate the row after validation"
+    assert row_declaration.start() < invalid_row.start() < row_allocation.start(), (
+        "add_row must declare, validate, then allocate for VCS portability"
     )
 
     render = re.search(
@@ -319,6 +325,22 @@ def test_v2_contract_regexes_reject_comments_suffixes_and_wrong_defaults():
         r"(?m)^[ \t]*function\s+void\s+add_row\s*\(\s*input\s+"
         r"string\s+cells\s*\[\$\]\s*\)\s*;"
     )
+    row_declaration = r"(?m)^[ \t]*common_scb_report_row\s+row\s*;"
+    row_allocation = r"(?m)^[ \t]*row\s*=\s*new\s*\(\s*\)\s*;"
+    invalid_row_guard = (
+        r"if\s*\(\s*m_headers\.size\s*\(\s*\)\s*==\s*0\s*\|\|\s*"
+        r"cells\.size\s*\(\s*\)\s*!=\s*m_headers\.size\s*\(\s*\)\s*\)\s*"
+        r"return\s*;"
+    )
+    portable_add_row = (
+        "common_scb_report_row row;\n"
+        "if (m_headers.size() == 0 || cells.size() != m_headers.size()) return;\n"
+        "row = new();"
+    )
+    mixed_declaration = (
+        "common_scb_report_row row = new();\n"
+        "if (m_headers.size() == 0 || cells.size() != m_headers.size()) return;"
+    )
 
     assert re.search(
         comparison_mode,
@@ -328,9 +350,15 @@ def test_v2_contract_regexes_reject_comments_suffixes_and_wrong_defaults():
     assert re.search(report_limit, "int m_report_limit = 10;")
     assert re.search(reporter_class, "class common_scb_reporter;")
     assert re.search(add_row, "function void add_row(input string cells[$]);")
+    declaration = re.search(row_declaration, portable_add_row)
+    guard = re.search(invalid_row_guard, portable_add_row)
+    allocation = re.search(row_allocation, portable_add_row)
+    assert declaration and guard and allocation
+    assert declaration.start() < guard.start() < allocation.start()
     assert not re.search(report_limit, "int m_report_limit = 11;")
     assert not re.search(reporter_class, "class common_scb_reporter_bad;")
     assert not re.search(add_row, "function void add_row_extra(input string cells[$]);")
+    assert not re.search(row_declaration, mixed_declaration)
     assert not re.search(
         comparison_mode,
         "// typedef enum int { SCB_ORDERED_EXACT, SCB_ORDERED_LOSSY, "

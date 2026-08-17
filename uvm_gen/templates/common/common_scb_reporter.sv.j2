@@ -25,9 +25,10 @@ class common_scb_reporter;
     endfunction
 
     function void add_row(input string cells[$]);
+        common_scb_report_row row;
         if (m_headers.size() == 0 || cells.size() != m_headers.size())
             return;
-        common_scb_report_row row = new();
+        row = new();
         row.cells = cells;
         foreach (cells[i])
             if (cells[i].len() > m_widths[i]) m_widths[i] = cells[i].len();
