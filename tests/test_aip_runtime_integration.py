@@ -80,21 +80,27 @@ def test_reset_finishes_deasserted(tmp_path, platform_type):
     base_test = read(project_dir, "tc/tc_base.sv")
 
     reset_body = strip_sv_comments(task_body(base_test, "reset_phase"))
-    before_drop, drop_objection, _ = reset_body.partition(
-        "phase.drop_objection(this);"
+    assert_in_order(
+        reset_body,
+        "harness.rst_n = 1'b0;",
+        "i = $urandom_range(10, 20);",
+        "repeat(i) @(posedge harness.clk);",
+        "harness.rst_n = 1'b1;",
+        "repeat(2) @(posedge harness.clk);",
+        "phase.drop_objection(this);",
     )
-    assert drop_objection
     assignments = list(
-        re.finditer(r"\bharness\.rst_n\s*=\s*([^;]+);", before_drop)
+        re.finditer(r"\bharness\.rst_n\s*=\s*([^;]+);", reset_body)
     )
     assert assignments
-    assert any(match.group(1).strip() == "1'b0" for match in assignments)
-    assert "i = $urandom_range" in before_drop
-    assert "repeat(i) @(posedge harness.clk);" in before_drop
     last_assignment = assignments[-1]
     assert last_assignment.group(1).strip() == "1'b1"
-    release_offset = last_assignment.end()
-    assert "repeat(2) @(posedge harness.clk);" in before_drop[release_offset:]
+    assert_in_order(
+        reset_body[last_assignment.start() :],
+        "harness.rst_n = 1'b1;",
+        "repeat(2) @(posedge harness.clk);",
+        "phase.drop_objection(this);",
+    )
 
 
 def test_aip_activity_is_command_owned(tmp_path, platform_type):
@@ -154,7 +160,7 @@ def test_non_aip_output_excludes_aip_integration(tmp_path, platform_type):
         if path.is_file()
     )
 
-    assert "aip_" not in generated_text
+    assert "aip_" not in generated_text.lower()
     assert not (project_dir / "tc" / "tc_tcl.sv").exists()
 
 
@@ -162,7 +168,14 @@ def test_aip_tb_file_keeps_core_package_entries(tmp_path, platform_type):
     project_dir = generate(tmp_path, platform_type, aip_core=True)
     tb_file = read(project_dir, "cfg/tb.f")
 
-    assert "+incdir+$AIP_CORE_HOME" in tb_file
-    assert tb_file.splitlines().count("$AIP_CORE_HOME/aip_core_pkg.sv") == 1
+    aip_home_lines = [
+        line.strip()
+        for line in tb_file.splitlines()
+        if line.strip() and "$AIP_CORE_HOME" in line
+    ]
+    assert aip_home_lines == [
+        "+incdir+$AIP_CORE_HOME",
+        "$AIP_CORE_HOME/aip_core_pkg.sv",
+    ]
     assert tb_file.count("aip_core_pkg.sv") == 1
     assert not list(project_dir.rglob("aip_core_pkg.sv"))
