@@ -643,9 +643,15 @@ def assert_core_contract(core_raw: str) -> None:
     assert "m_current_pending" not in overflow_accounting, (
         "overflow must not change the admitted-pending gauge"
     )
-    assert not re.search(
-        r"if\s*\([^)]*m_current_pending[^)]*(?:>|!=)\s*0", core
-    ), "pending decrements must not hide accounting bugs with underflow guards"
+    for description, body in (
+        ("match", match_accounting),
+        ("mismatch", mismatch_accounting),
+        ("drop", drop_accounting),
+        ("unexpected", unexpected_accounting),
+    ):
+        assert not re.search(
+            r"if\s*\([^)]*\bm_current_pending\b[^)]*\)", body
+        ), f"{description} must not hide pending accounting bugs with a gauge guard"
 
     details = core_method_body(
         core,
@@ -830,6 +836,11 @@ def test_standalone_core_template_implements_task5_comparison_contract():
             r"(?s)(function void common_uvm_scb::record_unexpected\b.*?)"
             r"if \(actual != null\) m_current_pending--;",
             r"\1",
+        ),
+        "truthy pending underflow guard": (
+            r"(?s)(function void common_uvm_scb::record_drop\b.*?)"
+            r"(if \(expected != null\) m_current_pending--;)",
+            r"\1if (m_current_pending) \2",
         ),
         "missing deterministic diff reset": (
             r"diff = \"\";\s*(return expected\.self_define_do_compare)",
