@@ -118,6 +118,204 @@ def registry_match_position(body: str, pattern: str, description: str) -> int:
     return match.start()
 
 
+def adapter_task_body(adapter: str, task_name: str) -> str:
+    match = re.search(
+        rf"(?ms)^[ \t]*(?:protected[ \t]+)?static[ \t]+task[ \t]+"
+        rf"{re.escape(task_name)}\b"
+        rf"[^;]*;(?P<body>.*?)^[ \t]*endtask",
+        adapter,
+    )
+    assert match, f"missing adapter {task_name} task body"
+    return match.group("body")
+
+
+def assert_aip_generation_contract(
+    aip_core: bool, common_file_names: set[str], filelist: str
+) -> None:
+    adapter_name = "common_scb_aip_adapter.sv"
+    adapter_entry = f"./{adapter_name}"
+    assert (adapter_name in common_file_names) is aip_core
+    assert (adapter_entry in filelist) is aip_core
+
+    active_lines = [
+        line.strip()
+        for line in filelist.splitlines()
+        if line.strip() and not line.lstrip().startswith("+")
+    ]
+    expected_lines = ["./common_lib_pkg.sv"]
+    if aip_core:
+        expected_lines.extend(
+            ["./aip_activity_subscriber.sv", adapter_entry]
+        )
+    assert active_lines == expected_lines
+
+
+def assert_aip_adapter_contract(adapter_raw: str) -> None:
+    adapter = strip_sv_comments(adapter_raw)
+
+    assert re.search(
+        r"(?m)^[ \t]*import[ \t]+aip_core_pkg::\*[ \t]*;[ \t]*$",
+        adapter,
+    ), "adapter must import AIP Core"
+    assert re.search(
+        r"(?m)^[ \t]*import[ \t]+common_lib_pkg::\*[ \t]*;[ \t]*$",
+        adapter,
+    ), "adapter must import the AIP-independent scoreboard control package"
+    assert re.search(
+        r"(?m)^[ \t]*class[ \t]+common_scb_aip_adapter[ \t]*;",
+        adapter,
+    ), "missing adapter class"
+
+    finish = adapter_task_body(adapter, "finish")
+    finish_status = registry_match_position(
+        finish,
+        r"aip_cmd::__aip_cmd_last_status\s*=\s*status\s*;",
+        "finish status forwarding",
+    )
+    finish_result = registry_match_position(
+        finish,
+        r"aip_cmd::__aip_cmd_last_result\s*=\s*result\s*;",
+        "finish result forwarding",
+    )
+    assert finish_status < finish_result
+    assert adapter.count("aip_cmd::__aip_cmd_last_status") == 1
+    assert adapter.count("aip_cmd::__aip_cmd_last_result") == 1
+
+    lookup = registry_function_body(
+        adapter,
+        (
+            r"^[ \t]*protected[ \t]+static[ \t]+function[ \t]+"
+            r"common_scb_control_proxy[ \t]+lookup\s*\([^;]*;"
+        ),
+        "adapter lookup",
+    )
+    assert re.search(
+        r"common_scb_registry::find\s*\(\s*name\s*\)", lookup
+    ), "adapter lookup must use the non-parameterized registry"
+    assert re.search(
+        r"proxy\s*==\s*null.*unknown scoreboard.*error\s*=\s*\"\"",
+        lookup,
+        flags=re.DOTALL,
+    ), "adapter lookup must return a useful exact-name failure"
+
+    parser = registry_function_body(
+        adapter,
+        (
+            r"^[ \t]*protected[ \t]+static[ \t]+function[ \t]+bit[ \t]+"
+            r"parse_int_exact\s*\([^;]*;"
+        ),
+        "exact integer parser",
+    )
+    parser_guards = (
+        r"text\.len\s*\(\s*\)\s*==\s*0",
+        r"text\s*\[\s*0\s*\]\s*==\s*\"\+\"",
+        r"text\s*\[\s*0\s*\]\s*==\s*\"-\"",
+        r"index\s*==\s*text\.len\s*\(\s*\)",
+        r"text\s*\[\s*i\s*\].*\[\s*\"0\"\s*:\s*\"9\"\s*\]",
+        r"64'd2147483648",
+        r"64'd2147483647",
+        r"magnitude\s*>\s*\(\s*max_magnitude\s*-\s*digit\s*\)\s*/\s*10",
+    )
+    for guard in parser_guards:
+        assert re.search(guard, parser, flags=re.DOTALL), (
+            f"missing exact integer parser guard: {guard}"
+        )
+    assert not re.search(r"\$sscanf|\.atoi\s*\(|parse_int_arg", parser), (
+        "adapter must not use prefix-accepting or truncating integer parsers"
+    )
+
+    list_body = adapter_task_body(adapter, "list")
+    assert re.search(r"common_scb_registry::get_names\s*\(\s*names\s*\)", list_body)
+    assert re.search(r"names\s*\[\s*i\s*\]", list_body)
+    assert r'"\n"' in list_body
+    assert re.search(r"finish\s*\(\s*0\s*,\s*result\s*\)", list_body)
+
+    status_body = adapter_task_body(adapter, "status")
+    assert re.search(r"lookup\s*\(\s*name\s*,\s*error\s*\)", status_body)
+    assert re.search(r"finish\s*\(\s*-1\s*,\s*error\s*\)", status_body)
+    assert re.search(
+        r"finish\s*\(\s*0\s*,\s*proxy\.summary\s*\(\s*\)\s*\)",
+        status_body,
+    )
+
+    report_body = adapter_task_body(adapter, "report")
+    assert re.search(r"lookup\s*\(\s*name\s*,\s*error\s*\)", report_body)
+    assert re.search(
+        r"parse_int_exact\s*\(\s*limit_text\s*,\s*limit\s*\)",
+        report_body,
+    )
+    assert re.search(r"limit\s*<\s*-2", report_body)
+    assert re.search(r"proxy\.report\s*\(\s*limit\s*\)", report_body)
+    assert re.search(r"proxy\.summary\s*\(\s*\)", report_body)
+
+    set_limit_body = adapter_task_body(adapter, "set_limit")
+    assert re.search(r"lookup\s*\(\s*name\s*,\s*error\s*\)", set_limit_body)
+    assert re.search(
+        r"parse_int_exact\s*\(\s*limit_text\s*,\s*limit\s*\)",
+        set_limit_body,
+    )
+    assert re.search(
+        r"proxy\.set_report_limit\s*\(\s*limit\s*,\s*error\s*\)",
+        set_limit_body,
+    )
+    assert "%s report_limit=%0d" in set_limit_body
+
+    registrations = re.findall(
+        r"(?m)^[ \t]*`(aip_cmd_str_[12]i_status)\s*\(\s*"
+        r"(scb_[A-Za-z0-9_]+)\s*,",
+        adapter,
+    )
+    assert registrations == [
+        ("aip_cmd_str_1i_status", "scb_list"),
+        ("aip_cmd_str_1i_status", "scb_status"),
+        ("aip_cmd_str_2i_status", "scb_report"),
+        ("aip_cmd_str_2i_status", "scb_set_limit"),
+    ]
+    all_registrations = re.findall(
+        r"(?m)^[ \t]*`aip_cmd[A-Za-z0-9_]*\s*\(\s*"
+        r"([A-Za-z_][A-Za-z0-9_:]*)\s*,",
+        adapter,
+    )
+    assert all_registrations == [
+        "scb_list",
+        "scb_status",
+        "scb_report",
+        "scb_set_limit",
+    ], "adapter must register exactly the four approved commands"
+    assert re.search(
+        r"`aip_cmd_str_1i_status\s*\(\s*scb_list\s*,.*?unused\s*,\s*\"\"\s*\)",
+        adapter,
+        flags=re.DOTALL,
+    )
+    assert re.search(
+        r"`aip_cmd_str_2i_status\s*\(\s*scb_report\s*,.*?"
+        r"name\s*,\s*\"\"\s*,\s*limit\s*,\s*\"-2\"\s*\)",
+        adapter,
+        flags=re.DOTALL,
+    )
+    assert re.search(
+        r"`aip_cmd_str_2i_status\s*\(\s*scb_set_limit\s*,.*?"
+        r"name\s*,\s*\"\"\s*,\s*limit\s*,\s*\"\"\s*\)",
+        adapter,
+        flags=re.DOTALL,
+    )
+
+    forbidden = (
+        "scb_clear",
+        "reset_state",
+        ".delete(",
+        "clear(",
+        "push_expected",
+        "push_actual",
+    )
+    for token in forbidden:
+        assert token not in adapter, f"adapter exposes destructive capability: {token}"
+    assert "common_uvm_scb" not in adapter
+    assert "common_scb_registry::" in adapter
+    assert "common_scb_control_proxy" in adapter
+    assert "{{" not in adapter_raw and "{%" not in adapter_raw
+
+
 
 def assert_registry_contract(registry_raw: str) -> None:
     registry = strip_sv_comments(registry_raw)
@@ -552,12 +750,156 @@ def test_v2_report_has_limit_and_omission_accounting(tmp_path, platform_type):
 
 def test_non_aip_common_has_no_adapter_or_aip_commands(tmp_path, platform_type):
     project = generate(tmp_path, platform_type, aip_core=False)
-    assert not (project / "common/common_scb_aip_adapter.sv").exists()
+    common_dir = project / "common"
+    assert_aip_generation_contract(
+        False,
+        {path.name for path in common_dir.glob("*.sv")},
+        read(project, "common/common_lib_pkg.f"),
+    )
     common_files = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (project / "common").glob("*.sv")
     )
     assert "aip_cmd" not in common_files
+
+
+def test_aip_output_has_exact_non_destructive_scb_adapter(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type, aip_core=True)
+    adapter_path = project / "common/common_scb_aip_adapter.sv"
+    assert adapter_path.is_file()
+    assert_aip_adapter_contract(adapter_path.read_text(encoding="utf-8"))
+
+
+def test_aip_adapter_is_compiled_after_its_dependencies(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type, aip_core=True)
+    filelist = read(project, "common/common_lib_pkg.f")
+    assert_aip_generation_contract(
+        True,
+        {path.name for path in (project / "common").glob("*.sv")},
+        filelist,
+    )
+
+    tb_filelist = read(project, "cfg/tb.f")
+    assert tb_filelist.index("$AIP_CORE_HOME/aip_core_pkg.sv") < (
+        tb_filelist.index("-F   ./env.f")
+    )
+
+
+def test_aip_adapter_registration_contract_rejects_mutations():
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=True,
+    )
+    adapter_raw = PlatformGenerator(config).render_template(
+        "common/common_scb_aip_adapter.sv.j2",
+        file_name="common_scb_aip_adapter.sv",
+    )
+    mutations = {
+        "wrong report sentinel": (
+            r"(name\s*,\s*\"\"\s*,\s*limit\s*,\s*)\"-2\"",
+            r'\1"-1"',
+        ),
+        "missing command": (
+            r"(?m)^`aip_cmd_str_1i_status\s*\(\s*scb_status[^\n]*\)\n",
+            "",
+        ),
+        "extra command": (
+            r"(?m)^(`aip_cmd_str_1i_status\s*\(\s*scb_list[^\n]*\))$",
+            r"\1\n`aip_cmd_str_1i_status(scb_debug, common_scb_aip_adapter::list, unused, \"\")",
+        ),
+        "destructive reset command": (
+            r"(?m)^(`aip_cmd_str_1i_status\s*\(\s*scb_list[^\n]*\))$",
+            r"\1\n`aip_cmd_str_1i_status(scb_clear, common_scb_aip_adapter::list, unused, \"\")",
+        ),
+    }
+    for description, (pattern, replacement) in mutations.items():
+        broken, replacements = re.subn(
+            pattern,
+            replacement,
+            adapter_raw,
+            count=1,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert replacements == 1, f"failed to construct {description} mutation"
+        with pytest.raises(AssertionError):
+            assert_aip_adapter_contract(broken)
+
+
+def test_aip_generation_contract_rejects_guard_and_order_regressions():
+    non_aip_files = {"common_lib_pkg.sv", "common_uvm_scb.sv"}
+    non_aip_filelist = "+incdir+./\n./common_lib_pkg.sv\n"
+    aip_files = non_aip_files | {
+        "aip_activity_subscriber.sv",
+        "common_scb_aip_adapter.sv",
+    }
+    aip_filelist = (
+        "+incdir+./\n"
+        "./common_lib_pkg.sv\n"
+        "./aip_activity_subscriber.sv\n"
+        "./common_scb_aip_adapter.sv\n"
+    )
+
+    assert_aip_generation_contract(False, non_aip_files, non_aip_filelist)
+    assert_aip_generation_contract(True, aip_files, aip_filelist)
+
+    with pytest.raises(AssertionError):
+        assert_aip_generation_contract(
+            False,
+            non_aip_files | {"common_scb_aip_adapter.sv"},
+            non_aip_filelist + "./common_scb_aip_adapter.sv\n",
+        )
+    with pytest.raises(AssertionError):
+        assert_aip_generation_contract(
+            True,
+            aip_files,
+            aip_filelist.replace(
+                "./common_lib_pkg.sv\n./aip_activity_subscriber.sv",
+                "./aip_activity_subscriber.sv\n./common_lib_pkg.sv",
+            ),
+        )
+
+
+def test_aip_adapter_vcs_behavioral_assets_cover_runtime_contract():
+    repository = Path(__file__).parent.parent
+    harness_path = repository / "tests/vcs/common_scb_aip_adapter_tb.sv"
+    runner_path = repository / "tests/vcs/run_common_scb_aip_adapter.sh"
+    assert harness_path.is_file(), "missing adapter VCS behavioral harness"
+    assert runner_path.is_file(), "missing adapter VCS behavioral runner"
+
+    harness = harness_path.read_text(encoding="utf-8")
+    runner = runner_path.read_text(encoding="utf-8")
+    for command in ("list", "status", "report", "set_limit"):
+        assert f"common_scb_aip_adapter::{command}" in harness
+    for boundary in (
+        '"-2147483648"',
+        '"2147483647"',
+        '"-2147483649"',
+        '"2147483648"',
+        '"1.0"',
+        '"1junk"',
+        '"+"',
+        '"-"',
+        '""',
+    ):
+        assert boundary in harness
+    assert "STALE_RESULT" in harness
+    assert "SCB_AIP_ADAPTER_TB_PASS" in harness
+    assert "scb_clear" not in harness and "reset_state" not in harness
+    for command in ("scb_list", "scb_status", "scb_report", "scb_set_limit"):
+        assert f'aip_cmd::get_handle("{command}")' in harness
+    assert '"9999999999999999999999999999999999999999"' in harness
+
+    assert "timeout" in runner
+    assert "SCB_AIP_ADAPTER_TB_PASS" in runner
+    assert "UVM_(ERROR|FATAL)" in runner
+    assert r"\[ERROR\]" in runner
+    assert "aip_core_pkg.sv" in runner
+    assert "common_lib_pkg.f" in runner
 
 
 def test_v2_types_expose_approved_defaults(tmp_path, platform_type):

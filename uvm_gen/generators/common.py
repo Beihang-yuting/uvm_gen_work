@@ -25,6 +25,7 @@ class CommonGenerator(BaseGenerator):
         f_content = "+incdir+./\n./common_lib_pkg.sv\n"
         if self.cfg.aip_core:
             f_content += "./aip_activity_subscriber.sv\n"
+            f_content += "./common_scb_aip_adapter.sv\n"
         self.write_file(os.path.join(output_dir, "common_lib_pkg.f"), f_content)
 
         # Generate SV files
@@ -39,3 +40,11 @@ class CommonGenerator(BaseGenerator):
                 file_name="aip_activity_subscriber.sv",
             )
             self.write_file(os.path.join(output_dir, "aip_activity_subscriber.sv"), content)
+
+            content = self.render_template(
+                "common/common_scb_aip_adapter.sv.j2",
+                file_name="common_scb_aip_adapter.sv",
+            )
+            self.write_file(
+                os.path.join(output_dir, "common_scb_aip_adapter.sv"), content
+            )

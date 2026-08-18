@@ -1,0 +1,139 @@
+{{ header(file_name) }}
+`ifndef COMMON_SCB_AIP_ADAPTER__SV
+`define COMMON_SCB_AIP_ADAPTER__SV
+
+import aip_core_pkg::*;
+import common_lib_pkg::*;
+
+class common_scb_aip_adapter;
+    protected static task finish(int status, string result);
+        aip_cmd::__aip_cmd_last_status = status;
+        aip_cmd::__aip_cmd_last_result = result;
+    endtask
+
+    protected static function common_scb_control_proxy lookup(
+        string name,
+        output string error
+    );
+        common_scb_control_proxy proxy;
+        proxy = common_scb_registry::find(name);
+        if (proxy == null)
+            error = $sformatf("unknown scoreboard '%s'", name);
+        else
+            error = "";
+        return proxy;
+    endfunction
+
+    protected static function bit parse_int_exact(
+        string text,
+        output int value
+    );
+        int index;
+        int i;
+        int digit;
+        bit negative;
+        longint unsigned magnitude;
+        longint unsigned max_magnitude;
+
+        value = 0;
+        if (text.len() == 0) return 0;
+
+        index = 0;
+        negative = 0;
+        if ((text[0] == "+") || (text[0] == "-")) begin
+            negative = (text[0] == "-");
+            index = 1;
+        end
+        if (index == text.len()) return 0;
+
+        magnitude = 0;
+        max_magnitude = negative ? 64'd2147483648 : 64'd2147483647;
+        for (i = index; i < text.len(); i++) begin
+            if (!(text[i] inside {["0":"9"]})) return 0;
+            digit = text[i] - "0";
+            if (magnitude > (max_magnitude - digit) / 10) return 0;
+            magnitude = (magnitude * 10) + digit;
+        end
+
+        if (negative) begin
+            if (magnitude == 64'd2147483648)
+                value = -2147483647 - 1;
+            else
+                value = -int'(magnitude);
+        end else begin
+            value = int'(magnitude);
+        end
+        return 1;
+    endfunction
+
+    static task list(string unused);
+        string names[$];
+        string result;
+        result = "";
+        common_scb_registry::get_names(names);
+        foreach (names[i])
+            result = {result, (i == 0) ? "" : "\n", names[i]};
+        finish(0, result);
+    endtask
+
+    static task status(string name);
+        string error;
+        common_scb_control_proxy proxy;
+        proxy = lookup(name, error);
+        if (proxy == null) begin
+            finish(-1, error);
+            return;
+        end
+        finish(0, proxy.summary());
+    endtask
+
+    static task report(string name, string limit_text);
+        string error;
+        int limit;
+        common_scb_control_proxy proxy;
+        proxy = lookup(name, error);
+        if (proxy == null) begin
+            finish(-1, error);
+            return;
+        end
+        if (!parse_int_exact(limit_text, limit)) begin
+            finish(-1, $sformatf("invalid report limit '%s'", limit_text));
+            return;
+        end
+        if (limit < -2) begin
+            finish(-1, $sformatf("invalid report limit '%s'", limit_text));
+            return;
+        end
+        proxy.report(limit);
+        finish(0, proxy.summary());
+    endtask
+
+    static task set_limit(string name, string limit_text);
+        string error;
+        int limit;
+        common_scb_control_proxy proxy;
+        proxy = lookup(name, error);
+        if (proxy == null) begin
+            finish(-1, error);
+            return;
+        end
+        if (!parse_int_exact(limit_text, limit)) begin
+            finish(-1, $sformatf("invalid report limit '%s'", limit_text));
+            return;
+        end
+        if (!proxy.set_report_limit(limit, error)) begin
+            finish(-1, error);
+            return;
+        end
+        finish(0, $sformatf("%s report_limit=%0d", name, limit));
+    endtask
+endclass
+
+`aip_cmd_str_1i_status(scb_list, common_scb_aip_adapter::list, unused, "")
+`aip_cmd_str_1i_status(scb_status, common_scb_aip_adapter::status, name, "")
+`aip_cmd_str_2i_status(scb_report, common_scb_aip_adapter::report,
+                       name, "", limit, "-2")
+`aip_cmd_str_2i_status(scb_set_limit, common_scb_aip_adapter::set_limit,
+                       name, "", limit, "")
+
+`endif
