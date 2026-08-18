@@ -18,6 +18,14 @@ class {{ name }}_trans extends uvm_sequence_item;
         return 1;
     endfunction
 
+    virtual function longint unsigned get_scb_stream_id();
+        return '1;
+    endfunction
+
+    virtual function int get_scb_kind();
+        return -1;
+    endfunction
+
 {% if aip_core %}
 
     // --- aip_cmdline parameter loading ---

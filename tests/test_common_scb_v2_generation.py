@@ -30,6 +30,23 @@ def generate(
     return Path(PlatformGenerator(config).generate())
 
 
+def generate_with_agents(
+    tmp_path: Path,
+    platform_type: PlatformType,
+    agents: tuple[str, ...],
+    aip_core: bool = False,
+) -> Path:
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig(agent) for agent in agents],
+        platform_type=platform_type,
+        aip_core=aip_core,
+        output_dir=str(tmp_path),
+    )
+    return Path(PlatformGenerator(config).generate())
+
+
 def read(project: Path, relative_path: str) -> str:
     return (project / relative_path).read_text(encoding="utf-8")
 
@@ -823,3 +840,863 @@ def test_v2_contract_regexes_reject_comments_suffixes_and_wrong_defaults():
         "// typedef enum int { SCB_ORDERED_EXACT, SCB_ORDERED_LOSSY, "
         "SCB_UNORDERED } common_scb_cmp_mode_e;",
     )
+
+
+SCB_WIRING_AGENTS = ("axi", "apb")
+
+
+def sv_function_body(systemverilog: str, declaration: str, description: str) -> str:
+    source = strip_sv_comments(systemverilog)
+    match = re.search(
+        rf"(?ms){declaration}(?P<body>.*?)^[ \t]*endfunction\b", source
+    )
+    assert match, f"missing {description} function body"
+    return match.group("body")
+
+
+def sv_task_body(systemverilog: str, declaration: str, description: str) -> str:
+    source = strip_sv_comments(systemverilog)
+    match = re.search(rf"(?ms){declaration}(?P<body>.*?)^[ \t]*endtask\b", source)
+    assert match, f"missing {description} task body"
+    return match.group("body")
+
+
+def assert_scb_push(body: str, agent: str, direction: str):
+    match = re.search(
+        rf"\bm_{agent}_scb\.push_{direction}\s*\(\s*tr\s*,\s*"
+        r"tr\.get_scb_stream_id\s*\(\s*\)\s*,\s*"
+        r"tr\.get_scb_kind\s*\(\s*\)\s*\)\s*;",
+        body,
+    )
+    assert match, f"{agent} {direction} callback must pass both routing hooks"
+    return match
+
+
+def assert_checker_v2_wiring(checker_raw: str, platform_type: PlatformType) -> None:
+    checker = strip_sv_comments(checker_raw)
+    for agent in SCB_WIRING_AGENTS:
+        scoreboard_declaration = (
+            rf"(?m)^[ \t]*common_uvm_scb\s*#\s*\(\s*{agent}_trans\s*\)\s+"
+            rf"m_{agent}_scb\s*;"
+        )
+        assert len(re.findall(scoreboard_declaration, checker)) == 1, (
+            f"checker must own exactly one typed {agent} scoreboard"
+        )
+        scoreboard_construction = (
+            rf"m_{agent}_scb\s*=\s*common_uvm_scb\s*#\s*\(\s*{agent}_trans\s*\)"
+            rf"\s*::\s*type_id\s*::\s*create\s*\(\s*\"m_{agent}_scb\"\s*,\s*this\s*\)\s*;"
+        )
+        assert len(re.findall(scoreboard_construction, checker)) == 1, (
+            f"checker must construct exactly one typed {agent} scoreboard"
+        )
+
+        if platform_type is PlatformType.ADVANCE:
+            for endpoint, suffix in (("rm", "rm"), ("agt", "agt")):
+                declaration = (
+                    rf"(?m)^[ \t]*uvm_analysis_imp_from_{endpoint}_{agent}\s*#\s*"
+                    rf"\(\s*{agent}_trans\s*,\s*top_checker\s*\)\s*"
+                    rf"m_from_{endpoint}_{agent}_imp\s*;"
+                )
+                assert len(re.findall(declaration, checker)) == 1, (
+                    f"missing typed Advance {agent} {suffix} analysis imp"
+                )
+                construction = (
+                    rf"m_from_{endpoint}_{agent}_imp\s*=\s*new\s*\(\s*"
+                    rf"\"m_from_{endpoint}_{agent}_imp\"\s*,\s*this\s*\)\s*;"
+                )
+                assert len(re.findall(construction, checker)) == 1, (
+                    f"missing Advance {agent} {suffix} analysis imp construction"
+                )
+            expected_body = sv_function_body(
+                checker,
+                rf"^[ \t]*function\s+void\s+top_checker::write_from_rm_{agent}\s*\(\s*"
+                rf"{agent}_trans\s+tr\s*\)\s*;",
+                f"Advance {agent} expected callback",
+            )
+            actual_body = sv_function_body(
+                checker,
+                rf"^[ \t]*function\s+void\s+top_checker::write_from_agt_{agent}\s*\(\s*"
+                rf"{agent}_trans\s+tr\s*\)\s*;",
+                f"Advance {agent} actual callback",
+            )
+        else:
+            for direction in ("rm", "agt"):
+                declaration = (
+                    rf"(?m)^[ \t]*uvm_blocking_get_port\s*#\s*\(\s*"
+                    rf"{agent}_trans\s*\)\s*m_from_{direction}_{agent}_trans_port\s*;"
+                )
+                assert len(re.findall(declaration, checker)) == 1, (
+                    f"PORT {agent} {direction} FIFO get-port topology changed"
+                )
+            expected_body = sv_task_body(
+                checker,
+                rf"^[ \t]*task\s+top_checker::process_{agent}_trans_from_rm\s*\(\s*\)\s*;",
+                f"PORT {agent} expected worker",
+            )
+            actual_body = sv_task_body(
+                checker,
+                rf"^[ \t]*task\s+top_checker::process_{agent}_trans_from_agt\s*\(\s*\)\s*;",
+                f"PORT {agent} actual worker",
+            )
+            expected_get = re.search(
+                rf"(?:this\s*\.\s*)?m_from_rm_{agent}_trans_port\s*\.\s*get\s*\(\s*tr\s*\)\s*;",
+                expected_body,
+            )
+            assert expected_get, f"PORT {agent} expected worker must retain its blocking get"
+            actual_get = re.search(
+                rf"(?:this\s*\.\s*)?m_from_agt_{agent}_trans_port\s*\.\s*get\s*\(\s*tr\s*\)\s*;",
+                actual_body,
+            )
+            assert actual_get, f"PORT {agent} actual worker must retain its blocking get"
+
+        assert "m_scb_rec_rm_trans_total_cnt++" in expected_body
+        assert "m_scb_rec_dut_trans_total_cnt++" in actual_body
+        expected_push = assert_scb_push(expected_body, agent, "expected")
+        actual_push = assert_scb_push(actual_body, agent, "actual")
+        assert expected_body.index("m_scb_rec_rm_trans_total_cnt++") < expected_push.start()
+        assert actual_body.index("m_scb_rec_dut_trans_total_cnt++") < actual_push.start()
+        if platform_type is PlatformType.PORT:
+            assert expected_get.start() < expected_push.start()
+            assert actual_get.start() < actual_push.start()
+
+    reset_state = sv_function_body(
+        checker,
+        r"^[ \t]*function\s+void\s+top_checker::reset_state\s*\(\s*\)\s*;",
+        "checker reset_state",
+    )
+    for agent in SCB_WIRING_AGENTS:
+        assert re.search(
+            rf"\bm_{agent}_scb\s*\.\s*reset_state\s*\(\s*\)\s*;", reset_state
+        ), f"checker reset_state must propagate to {agent}"
+    reset_phase = sv_task_body(
+        checker,
+        r"^[ \t]*task\s+top_checker::reset_phase\s*\(\s*uvm_phase\s+phase\s*\)\s*;",
+        "checker reset_phase",
+    )
+    assert re.search(r"\bsuper\s*\.\s*reset_phase\s*\(\s*phase\s*\)\s*;", reset_phase)
+    if platform_type is PlatformType.ADVANCE:
+        assert re.search(r"\breset_state\s*\(\s*\)\s*;", reset_phase)
+    else:
+        assert not re.search(r"\breset_state\s*\(\s*\)\s*;", reset_phase), (
+            "PORT env must perform the sole reset after quiescing FIFO workers"
+        )
+
+    assert "uvm_sequence_item" not in checker
+    assert "$cast" not in checker
+    assert "TODO" not in checker_raw
+
+
+def assert_advance_rm_and_env_wiring(rm_raw: str, env_raw: str) -> None:
+    rm = strip_sv_comments(rm_raw)
+    for agent in SCB_WIRING_AGENTS:
+        assert re.search(
+            rf"(?m)^[ \t]*uvm_analysis_imp_from_{agent}_agt\s*#\s*\(\s*"
+            rf"{agent}_trans\s*,\s*top_rm\s*\)\s*m_from_{agent}_agt_imp\s*;",
+            rm,
+        ), f"missing typed Advance RM {agent} analysis imp"
+        assert re.search(
+            rf"(?m)^[ \t]*uvm_analysis_port\s*#\s*\(\s*{agent}_trans\s*\)\s*"
+            rf"m_{agent}_expected_ap\s*;",
+            rm,
+        ), f"missing typed Advance RM {agent} expected port"
+        for member in (
+            f"m_from_{agent}_agt_imp",
+            f"m_{agent}_expected_ap",
+        ):
+            assert re.search(
+                rf"\b{member}\s*=\s*new\s*\(\s*\"{member}\"\s*,\s*this\s*\)\s*;",
+                rm,
+            ), f"Advance RM must construct {member}"
+        callback = sv_function_body(
+            rm,
+            rf"^[ \t]*function\s+void\s+top_rm::write_from_{agent}_agt\s*\(\s*"
+            rf"{agent}_trans\s+tr\s*\)\s*;",
+            f"Advance RM {agent} callback",
+        )
+        assert re.search(
+            rf"\bm_{agent}_expected_ap\s*\.\s*write\s*\(\s*null\s*\)\s*;",
+            callback,
+        ), f"Advance RM must preserve null {agent} predictions"
+        assert re.search(
+            rf"\bm_{agent}_expected_ap\s*\.\s*write\s*\(\s*prediction\s*\)\s*;",
+            callback,
+        ), f"Advance RM must publish isolated {agent} predictions"
+
+    env = sv_function_body(
+        env_raw,
+        r"^[ \t]*function\s+void\s+top_env::connect_phase\s*\(\s*uvm_phase\s+phase\s*\)\s*;",
+        "Advance env connect_phase",
+    )
+    for agent in SCB_WIRING_AGENTS:
+        expected_connections = (
+            rf"\bm_{agent}_agt\s*\.\s*m_mon\s*\.\s*m_ap\s*\.\s*connect\s*\(\s*"
+            rf"m_rm\s*\.\s*m_from_{agent}_agt_imp\s*\)\s*;",
+            rf"\bm_rm\s*\.\s*m_{agent}_expected_ap\s*\.\s*connect\s*\(\s*"
+            rf"m_scb\s*\.\s*m_from_rm_{agent}_imp\s*\)\s*;",
+            rf"\bm_{agent}_agt\s*\.\s*m_mon\s*\.\s*m_ap\s*\.\s*connect\s*\(\s*"
+            rf"m_scb\s*\.\s*m_from_agt_{agent}_imp\s*\)\s*;",
+        )
+        for connection in expected_connections:
+            assert re.search(connection, env), f"missing Advance {agent} data path"
+
+    assert "uvm_sequence_item" not in rm
+    assert "cast_tr" not in rm
+    assert "TODO" not in rm_raw
+
+
+def test_generated_transactions_expose_default_scb_routing_hooks(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    for agent in SCB_WIRING_AGENTS:
+        trans = read(project, f"env/agents/{agent}_agent/src/{agent}_trans.sv")
+        uncommented = strip_sv_comments(trans)
+        comparison = re.search(
+            rf"(?ms)^[ \t]*function\s+bit\s+self_define_do_compare\s*\(\s*"
+            rf"{agent}_trans\s+cmp_trans\s*,.*?^[ \t]*endfunction\b",
+            uncommented,
+        )
+        assert comparison, f"missing {agent} comparison hook"
+        stream_id = sv_function_body(
+            trans,
+            r"^[ \t]*virtual\s+function\s+longint\s+unsigned\s+"
+            r"get_scb_stream_id\s*\(\s*\)\s*;",
+            f"{agent} stream-id hook",
+        )
+        kind = sv_function_body(
+            trans,
+            r"^[ \t]*virtual\s+function\s+int\s+get_scb_kind\s*\(\s*\)\s*;",
+            f"{agent} kind hook",
+        )
+        assert re.search(r"\breturn\s+'1\s*;", stream_id)
+        assert re.search(r"\breturn\s+-1\s*;", kind)
+        assert comparison.end() < uncommented.index("function longint unsigned get_scb_stream_id")
+
+
+def test_generated_transactions_make_scb_routing_hooks_virtual(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    for agent in SCB_WIRING_AGENTS:
+        trans = strip_sv_comments(
+            read(project, f"env/agents/{agent}_agent/src/{agent}_trans.sv")
+        )
+        assert re.search(
+            r"(?m)^[ \t]*virtual\s+function\s+longint\s+unsigned\s+"
+            r"get_scb_stream_id\s*\(\s*\)\s*;",
+            trans,
+        ), f"{agent} stream-id hook must support protocol overrides"
+        assert re.search(
+            r"(?m)^[ \t]*virtual\s+function\s+int\s+get_scb_kind\s*\(\s*\)\s*;",
+            trans,
+        ), f"{agent} kind hook must support protocol overrides"
+
+
+def checker_direction_body(
+    checker: str, platform_type: PlatformType, agent: str, direction: str
+) -> str:
+    if platform_type is PlatformType.ADVANCE:
+        source = "rm" if direction == "expected" else "agt"
+        return sv_function_body(
+            checker,
+            rf"^[ \t]*function\s+void\s+top_checker::write_from_{source}_{agent}\s*"
+            rf"\(\s*{agent}_trans\s+tr\s*\)\s*;",
+            f"Advance {agent} {direction} callback",
+        )
+    source = "rm" if direction == "expected" else "agt"
+    return sv_task_body(
+        checker,
+        rf"^[ \t]*task\s+top_checker::process_{agent}_trans_from_{source}\s*"
+        r"\(\s*\)\s*;",
+        f"PORT {agent} {direction} worker",
+    )
+
+
+def assert_null_safe_scb_routing(checker_raw: str, platform_type: PlatformType) -> None:
+    checker = strip_sv_comments(checker_raw)
+    for agent in SCB_WIRING_AGENTS:
+        for direction in ("expected", "actual"):
+            body = checker_direction_body(checker, platform_type, agent, direction)
+            guard = re.search(
+                r"(?ms)if\s*\(\s*tr\s*==\s*null\s*\)\s*begin"
+                r"(?P<null_branch>.*?)^[ \t]*end\s*else\s*begin"
+                r"(?P<non_null_branch>.*?)^[ \t]*end\b",
+                body,
+            )
+            assert guard, f"{agent} {direction} path must guard null transactions"
+            assert "get_scb_stream_id" not in body[: guard.start()]
+            assert "get_scb_kind" not in body[: guard.start()]
+            assert "get_scb_stream_id" not in guard.group("null_branch")
+            assert "get_scb_kind" not in guard.group("null_branch")
+            assert re.search(
+                rf"\bm_{agent}_scb\.push_{direction}\s*\(\s*tr\s*,\s*'1\s*,\s*-1\s*\)\s*;",
+                guard.group("null_branch"),
+            ), f"{agent} {direction} null input must reach the core defaults"
+            assert_scb_push(guard.group("non_null_branch"), agent, direction)
+
+
+def test_generated_checkers_route_null_transactions_without_hook_dereference(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type)
+    assert_null_safe_scb_routing(read(project, "env/top_checker.sv"), platform_type)
+
+
+def test_null_routing_contract_rejects_missing_expected_or_actual_guards(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type)
+    checker = read(project, "env/top_checker.sv")
+    assert_null_safe_scb_routing(checker, platform_type)
+    for direction in ("expected", "actual"):
+        source = "rm" if direction == "expected" else "agt"
+        marker = (
+            f"write_from_{source}_axi"
+            if platform_type is PlatformType.ADVANCE
+            else f"process_axi_trans_from_{source}"
+        )
+        marker_position = checker.index(marker)
+        prefix = checker[:marker_position]
+        suffix = checker[marker_position:]
+        broken_suffix, replacements = re.subn(
+            r"if\s*\(\s*tr\s*==\s*null\s*\)\s*begin",
+            "if (tr != null) begin",
+            suffix,
+            count=1,
+        )
+        assert replacements == 1, f"failed to mutate {direction} null guard"
+        with pytest.raises(AssertionError):
+            assert_null_safe_scb_routing(prefix + broken_suffix, platform_type)
+
+
+def rm_prediction_body(rm: str, platform_type: PlatformType, agent: str) -> str:
+    if platform_type is PlatformType.ADVANCE:
+        return sv_function_body(
+            rm,
+            rf"^[ \t]*function\s+void\s+top_rm::write_from_{agent}_agt\s*"
+            rf"\(\s*{agent}_trans\s+tr\s*\)\s*;",
+            f"Advance RM {agent} prediction callback",
+        )
+    return sv_task_body(
+        rm,
+        rf"^[ \t]*task\s+top_rm::process_trans_from_{agent}_agt\s*\(\s*\)\s*;",
+        f"PORT RM {agent} prediction worker",
+    )
+
+
+def assert_rm_prediction_handle_isolation(
+    rm_raw: str, platform_type: PlatformType
+) -> None:
+    rm = strip_sv_comments(rm_raw)
+    for agent in SCB_WIRING_AGENTS:
+        body = rm_prediction_body(rm, platform_type, agent)
+        output = (
+            f"m_{agent}_expected_ap"
+            if platform_type is PlatformType.ADVANCE
+            else f"m_rm_{agent}_trans_to_scb_port"
+        )
+        assert re.search(
+            rf"(?m)^[ \t]*uvm_object\s+cloned\s*;", body
+        ), f"{agent} RM must store the clone as an object before casting"
+        assert re.search(
+            rf"(?m)^[ \t]*{agent}_trans\s+prediction\s*;", body
+        ), f"{agent} RM must use a typed prediction handle"
+        null_publish = re.search(
+            rf"(?ms)if\s*\(\s*tr\s*==\s*null\s*\)\s*begin.*?"
+            rf"\b{output}\s*\.\s*write\s*\(\s*null\s*\)\s*;.*?"
+            r"^[ \t]*end\b",
+            body,
+        )
+        assert null_publish, f"{agent} RM must preserve null for core handling"
+        clone = re.search(r"\bcloned\s*=\s*tr\s*\.\s*clone\s*\(\s*\)\s*;", body)
+        clone_guard = re.search(
+            rf"if\s*\(\s*cloned\s*==\s*null\s*\|\|\s*!\s*\$cast\s*"
+            rf"\(\s*prediction\s*,\s*cloned\s*\)\s*\)\s*begin.*?"
+            r"`uvm_error\b",
+            body,
+            flags=re.DOTALL,
+        )
+        prediction_publish = re.search(
+            rf"\b{output}\s*\.\s*write\s*\(\s*prediction\s*\)\s*;", body
+        )
+        assert clone, f"{agent} RM must clone the monitor transaction"
+        assert clone_guard, f"{agent} RM must report clone/cast failures"
+        assert prediction_publish, f"{agent} RM must publish the typed prediction"
+        assert clone.start() < clone_guard.start() < prediction_publish.start()
+        assert not re.search(
+            rf"\b{output}\s*\.\s*write\s*\(\s*tr\s*\)\s*;", body
+        ), f"{agent} RM must never publish the monitor handle directly"
+
+    assert "uvm_sequence_item" not in rm
+    assert "cast_tr" not in rm
+    assert "TODO" not in rm_raw
+
+
+def test_generated_rms_isolate_prediction_handles_from_actual_fanout(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type)
+    assert_rm_prediction_handle_isolation(read(project, "env/top_rm.sv"), platform_type)
+
+
+def test_rm_isolation_contract_rejects_direct_publish_or_missing_clone(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type)
+    rm = read(project, "env/top_rm.sv")
+    assert_rm_prediction_handle_isolation(rm, platform_type)
+    output = (
+        "m_axi_expected_ap"
+        if platform_type is PlatformType.ADVANCE
+        else "m_rm_axi_trans_to_scb_port"
+    )
+    direct_publish = rm.replace(
+        f"{output}.write(prediction);", f"{output}.write(tr);", 1
+    )
+    assert direct_publish != rm, "failed to construct direct-publish mutation"
+    with pytest.raises(AssertionError):
+        assert_rm_prediction_handle_isolation(direct_publish, platform_type)
+
+    missing_clone = rm.replace("cloned = tr.clone();", "cloned = null;", 1)
+    assert missing_clone != rm, "failed to construct missing-clone mutation"
+    with pytest.raises(AssertionError):
+        assert_rm_prediction_handle_isolation(missing_clone, platform_type)
+
+
+def required_match_position(body: str, pattern: str, description: str) -> int:
+    match = re.search(pattern, body, flags=re.MULTILINE | re.DOTALL)
+    assert match, f"missing {description}"
+    return match.start()
+
+
+def assert_port_worker_lifecycle(
+    component_raw: str, component: str, agents: tuple[str, ...]
+) -> None:
+    source = strip_sv_comments(component_raw)
+    assert re.search(
+        r"(?m)^[ \t]*int\s+m_active_worker_count\s*;",
+        source,
+    ), f"{component} must acknowledge every graceful FIFO-worker stop"
+    assert re.search(
+        r"(?m)^[ \t]*bit\s+m_workers_running\s*;", source
+    ), f"{component} must prevent duplicate worker starts"
+    assert re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+m_worker_epoch\s*;", source
+    ), f"{component} must invalidate workers across reset epochs"
+    assert re.search(
+        r"(?m)^[ \t]*bit\s+m_run_phase_started\s*;", source
+    ), f"{component} must only restart workers after run_phase begins"
+    assert re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+"
+        r"m_worker_restart_request_epoch\s*;",
+        source,
+    ), f"{component} must retain restart requests until its run_phase supervisor handles them"
+    assert re.search(
+        r"(?m)^[ \t]*longint\s+unsigned\s+"
+        r"m_worker_start_ack_epoch\s*;",
+        source,
+    ), f"{component} must acknowledge supervisor-owned worker restarts"
+
+    run = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::run_phase\s*\(\s*uvm_phase\s+phase\s*\)\s*;",
+        f"PORT {component} run_phase",
+    )
+    run_positions = [
+        required_match_position(
+            run,
+            r"\bsuper\s*\.\s*run_phase\s*\(\s*phase\s*\)\s*;",
+            f"{component} run_phase super call",
+        ),
+        required_match_position(
+            run,
+            r"m_run_phase_started\s*=\s*1\s*;",
+            f"{component} run_phase start mark",
+        ),
+        required_match_position(
+            run,
+            r"this\s*\.\s*supervise_workers\s*\(\s*\)\s*;",
+            f"{component} persistent worker supervisor",
+        ),
+    ]
+    assert run_positions == sorted(run_positions), (
+        f"{component} run_phase must own the long-lived worker supervisor"
+    )
+
+    supervisor = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::supervise_workers\s*\(\s*\)\s*;",
+        f"PORT {component} supervisor",
+    )
+    supervisor_positions = [
+        required_match_position(
+            supervisor,
+            r"this\s*\.\s*start_workers\s*\(\s*\)\s*;",
+            f"{component} supervisor initial worker start",
+        ),
+        required_match_position(
+            supervisor,
+            r"forever\s+begin",
+            f"{component} persistent supervisor loop",
+        ),
+        required_match_position(
+            supervisor,
+            r"wait\s*\(\s*m_worker_restart_request_epoch\s*!=\s*"
+            r"handled_restart_epoch\s*\)\s*;",
+            f"{component} retained restart request wait",
+        ),
+    ]
+    assert supervisor_positions == sorted(supervisor_positions), (
+        f"{component} supervisor must start once then wait persistently for restarts"
+    )
+    assert len(re.findall(r"this\s*\.\s*start_workers\s*\(\s*\)\s*;", supervisor)) == 2, (
+        f"{component} supervisor must be the only restart owner"
+    )
+    assert re.search(
+        r"m_worker_start_ack_epoch\s*=\s*handled_restart_epoch\s*;",
+        supervisor,
+    ), f"{component} supervisor must publish an explicit startup acknowledgement"
+
+    request = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::request_workers_restart\s*\(\s*\)\s*;",
+        f"PORT {component} restart request",
+    )
+    assert re.search(
+        r"m_worker_restart_request_epoch\s*\+\+\s*;", request
+    ), f"{component} restart request must advance a retained epoch"
+    assert "start_workers" not in request, (
+        f"{component} restart request must not spawn reset-phase descendants"
+    )
+
+    started = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::wait_for_workers_started\s*\(\s*\)\s*;",
+        f"PORT {component} startup acknowledgement",
+    )
+    assert re.search(
+        r"requested_restart_epoch\s*=\s*m_worker_restart_request_epoch\s*;",
+        started,
+    ), f"{component} startup wait must bind to the requested restart epoch"
+    assert re.search(
+        r"wait\s*\(\s*m_run_phase_started\s*&&\s*"
+        r"m_worker_start_ack_epoch\s*>=\s*requested_restart_epoch\s*\)\s*;",
+        started,
+    ), f"{component} startup wait must not accept a stale acknowledgement"
+
+    start = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::start_workers\s*\(\s*\)\s*;",
+        f"PORT {component} start_workers",
+    )
+    start_positions = [
+        required_match_position(
+            start,
+            r"if\s*\(\s*m_workers_running\s*\)\s*return\s*;",
+            f"{component} duplicate-start guard",
+        ),
+        required_match_position(
+            start,
+            r"m_workers_running\s*=\s*1\s*;",
+            f"{component} worker-running mark",
+        ),
+        required_match_position(
+            start,
+            r"m_worker_epoch\s*\+\+\s*;",
+            f"{component} worker epoch increment",
+        ),
+        required_match_position(
+            start,
+            r"m_active_worker_count\s*=\s*0\s*;",
+            f"{component} worker-count reset",
+        ),
+        required_match_position(start, r"\bfork\b", f"{component} worker fork"),
+    ]
+    assert start_positions == sorted(start_positions), (
+        f"{component} must mark and epoch workers before spawning them"
+    )
+    worker_count = len(agents) * (1 if component == "rm" else 2)
+    assert len(re.findall(r"m_active_worker_count\s*\+\+\s*;", start)) == worker_count, (
+        f"{component} must count every worker before it blocks"
+    )
+    assert len(re.findall(r"m_active_worker_count\s*-\-\s*;", start)) == worker_count, (
+        f"{component} must acknowledge every worker exit"
+    )
+    for agent in agents:
+        workers = (
+            (f"process_trans_from_{agent}_agt",)
+            if component == "rm"
+            else (
+                f"process_{agent}_trans_from_rm",
+                f"process_{agent}_trans_from_agt",
+            )
+        )
+        for worker in workers:
+            assert worker in start, f"{component} must restart {agent} workers"
+    if agents:
+        assert re.search(
+            rf"wait\s*\(\s*launch_epoch\s*!=\s*m_worker_epoch\s*\|\|\s*"
+            rf"m_active_worker_count\s*==\s*{worker_count}\s*\)\s*;", start
+        ), f"{component} must wait until every worker can acknowledge reset"
+
+    stop = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::stop_workers\s*\(\s*\)\s*;",
+        f"PORT {component} stop_workers",
+    )
+    stop_positions = [
+        required_match_position(
+            stop,
+            r"m_workers_running\s*=\s*0\s*;",
+            f"{component} stop mark",
+        ),
+        required_match_position(
+            stop,
+            r"m_worker_epoch\s*\+\+\s*;",
+            f"{component} stop epoch increment",
+        ),
+    ]
+    assert stop_positions == sorted(stop_positions), (
+        f"{component} must invalidate workers before their null wake-up"
+    )
+    assert ".kill(" not in stop, (
+        "killing a blocked uvm_tlm_fifo.get leaks the FIFO blocked-get count"
+    )
+    stopped = sv_task_body(
+        source,
+        rf"^[ \t]*task\s+top_{component}::wait_for_workers_stopped\s*\(\s*\)\s*;",
+        f"PORT {component} wait_for_workers_stopped",
+    )
+    assert re.search(
+        r"wait\s*\(\s*m_active_worker_count\s*==\s*0\s*\)\s*;", stopped
+    ), f"{component} must wait for blocked gets to return before FIFO flush"
+
+    for agent in agents:
+        workers = (
+            (f"process_trans_from_{agent}_agt",)
+            if component == "rm"
+            else (
+                f"process_{agent}_trans_from_rm",
+                f"process_{agent}_trans_from_agt",
+            )
+        )
+        for worker in workers:
+            body = sv_task_body(
+                source,
+                rf"^[ \t]*task\s+top_{component}::{worker}\s*\(\s*\)\s*;",
+                f"PORT {component} {worker}",
+            )
+            epoch = required_match_position(
+                body,
+                r"worker_epoch\s*=\s*m_worker_epoch\s*;",
+                f"{component} {worker} pre-get epoch capture",
+            )
+            get = required_match_position(
+                body,
+                r"\.\s*get\s*\(\s*tr\s*\)\s*;",
+                f"{component} {worker} blocking get",
+            )
+            stop_guard = required_match_position(
+                body,
+                r"if\s*\(\s*!\s*m_workers_running\s*\|\|\s*"
+                r"worker_epoch\s*!=\s*m_worker_epoch\s*\)\s*break\s*;",
+                f"{component} {worker} post-get reset guard",
+            )
+            assert epoch < get < stop_guard, (
+                f"{component} {worker} must drop a reset wake-up before processing it"
+            )
+
+
+def assert_port_reset_epoch(
+    rm_raw: str, checker_raw: str, env_raw: str, agents: tuple[str, ...]
+) -> None:
+    assert_port_worker_lifecycle(rm_raw, "rm", agents)
+    assert_port_worker_lifecycle(checker_raw, "checker", agents)
+
+    checker_reset = sv_task_body(
+        checker_raw,
+        r"^[ \t]*task\s+top_checker::reset_phase\s*\(\s*uvm_phase\s+phase\s*\)\s*;",
+        "PORT checker reset_phase",
+    )
+    assert re.search(r"\bsuper\s*\.\s*reset_phase\s*\(\s*phase\s*\)\s*;", checker_reset)
+    assert not re.search(r"\breset_state\s*\(\s*\)\s*;", checker_reset), (
+        "PORT env must own the single reset cut; checker reset_phase cannot race it"
+    )
+
+    env = sv_task_body(
+        env_raw,
+        r"^[ \t]*task\s+top_env::reset_phase\s*\(\s*uvm_phase\s+phase\s*\)\s*;",
+        "PORT env reset_phase",
+    )
+    positions = [
+        required_match_position(
+            env, r"m_reset_epoch\s*\+\+\s*;", "PORT reset epoch increment"
+        ),
+        required_match_position(
+            env, r"m_rm\s*\.\s*stop_workers\s*\(\s*\)\s*;", "RM quiesce"
+        ),
+        required_match_position(
+            env, r"m_scb\s*\.\s*stop_workers\s*\(\s*\)\s*;", "checker quiesce"
+        ),
+    ]
+    for agent in agents:
+        for fifo in (
+            f"m_{agent}_agt_mon_to_rm_fifo",
+            f"m_rm_{agent}_trans_to_scb_fifo",
+            f"m_agt_{agent}_trans_to_scb_fifo",
+        ):
+            positions.append(
+                required_match_position(
+                    env,
+                    rf"\b{fifo}\s*\.\s*write\s*\(\s*null\s*\)\s*;",
+                    f"{agent} {fifo} graceful-stop wake-up",
+                )
+            )
+    positions.extend(
+        [
+            required_match_position(
+                env,
+                r"m_rm\s*\.\s*wait_for_workers_stopped\s*\(\s*\)\s*;",
+                "RM graceful-stop acknowledgement",
+            ),
+            required_match_position(
+                env,
+                r"m_scb\s*\.\s*wait_for_workers_stopped\s*\(\s*\)\s*;",
+                "checker graceful-stop acknowledgement",
+            ),
+        ]
+    )
+    for agent in agents:
+        for fifo in (
+            f"m_{agent}_agt_mon_to_rm_fifo",
+            f"m_rm_{agent}_trans_to_scb_fifo",
+            f"m_agt_{agent}_trans_to_scb_fifo",
+        ):
+            positions.append(
+                required_match_position(
+                    env,
+                    rf"\b{fifo}\s*\.\s*flush\s*\(\s*\)\s*;",
+                    f"{agent} {fifo} stale-epoch flush",
+                )
+            )
+    positions.extend(
+        [
+            required_match_position(
+                env,
+                r"m_scb\s*\.\s*reset_state\s*\(\s*\)\s*;",
+                "typed-scoreboard reset",
+            ),
+            required_match_position(
+                env,
+                r"m_rm\s*\.\s*request_workers_restart\s*\(\s*\)\s*;",
+                "RM supervisor restart request",
+            ),
+            required_match_position(
+                env,
+                r"m_scb\s*\.\s*request_workers_restart\s*\(\s*\)\s*;",
+                "checker supervisor restart request",
+            ),
+            required_match_position(
+                env,
+                r"m_rm\s*\.\s*wait_for_workers_started\s*\(\s*\)\s*;",
+                "RM supervisor startup acknowledgement",
+            ),
+            required_match_position(
+                env,
+                r"m_scb\s*\.\s*wait_for_workers_started\s*\(\s*\)\s*;",
+                "checker supervisor startup acknowledgement",
+            ),
+        ]
+    )
+    assert positions == sorted(positions), (
+        "PORT reset must epoch, quiesce, wake and await workers, flush every FIFO, "
+        "reset cores, then request and await supervisor-owned restarts"
+    )
+    assert not re.search(r"\b(?:m_rm|m_scb)\s*\.\s*start_workers\s*\(", env), (
+        "PORT env.reset_phase must never spawn long-lived workers itself"
+    )
+
+
+@pytest.mark.parametrize(
+    "agents",
+    [(), ("axi",), ("axi", "apb")],
+    ids=["zero_agents", "one_agent", "two_agents"],
+)
+def test_generated_port_reset_starts_a_clean_epoch(tmp_path, agents):
+    project = generate_with_agents(tmp_path, PlatformType.PORT, agents)
+    assert_port_reset_epoch(
+        read(project, "env/top_rm.sv"),
+        read(project, "env/top_checker.sv"),
+        read(project, "env/top_env.sv"),
+        agents,
+    )
+
+
+def test_port_reset_contract_rejects_unquiesced_or_racing_fifo_flush(tmp_path):
+    agents = ("axi", "apb")
+    project = generate_with_agents(tmp_path, PlatformType.PORT, agents)
+    rm = read(project, "env/top_rm.sv")
+    checker = read(project, "env/top_checker.sv")
+    env = read(project, "env/top_env.sv")
+    assert_port_reset_epoch(rm, checker, env, agents)
+
+    unquiesced = env.replace("m_scb.stop_workers();", "", 1)
+    assert unquiesced != env, "failed to construct missing-checker-quiesce mutation"
+    with pytest.raises(AssertionError):
+        assert_port_reset_epoch(rm, checker, unquiesced, agents)
+
+    racing_flush = env.replace(
+        "m_scb.wait_for_workers_stopped();\n    m_axi_agt_mon_to_rm_fifo.flush();",
+        "m_axi_agt_mon_to_rm_fifo.flush();\n    m_scb.wait_for_workers_stopped();",
+        1,
+    )
+    assert racing_flush != env, "failed to construct racing-flush mutation"
+    with pytest.raises(AssertionError):
+        assert_port_reset_epoch(rm, checker, racing_flush, agents)
+
+    phase_owned_restart = env.replace(
+        "m_rm.request_workers_restart();", "m_rm.start_workers();", 1
+    )
+    assert phase_owned_restart != env, (
+        "failed to construct reset-phase-owned worker restart mutation"
+    )
+    with pytest.raises(AssertionError):
+        assert_port_reset_epoch(rm, checker, phase_owned_restart, agents)
+
+
+def test_generated_checkers_own_and_feed_typed_v2_scoreboards(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type)
+    assert_checker_v2_wiring(read(project, "env/top_checker.sv"), platform_type)
+
+
+def test_generated_advance_rm_and_env_have_typed_expected_actual_paths(tmp_path):
+    project = generate(tmp_path, PlatformType.ADVANCE)
+    assert_advance_rm_and_env_wiring(
+        read(project, "env/top_rm.sv"), read(project, "env/top_env.sv")
+    )
+
+
+def test_wiring_contracts_reject_swaps_missing_agents_and_disconnected_paths(
+    tmp_path,
+):
+    advance = generate(tmp_path / "advance", PlatformType.ADVANCE)
+    checker = read(advance, "env/top_checker.sv")
+    env = read(advance, "env/top_env.sv")
+    rm = read(advance, "env/top_rm.sv")
+
+    swapped = checker.replace(
+        "m_axi_scb.push_expected(", "m_axi_scb.push_actual(", 2
+    )
+    assert swapped != checker, "failed to construct expected/actual swap mutation"
+    with pytest.raises(AssertionError):
+        assert_checker_v2_wiring(swapped, PlatformType.ADVANCE)
+
+    missing_agent = checker.replace(
+        "common_uvm_scb#(apb_trans) m_apb_scb;", "", 1
+    )
+    assert missing_agent != checker, "failed to construct missing-agent mutation"
+    with pytest.raises(AssertionError):
+        assert_checker_v2_wiring(missing_agent, PlatformType.ADVANCE)
+
+    disconnected = env.replace(
+        "m_rm.m_apb_expected_ap.connect(", "m_rm.m_apb_expected_ap.disconnect(", 1
+    )
+    assert disconnected != env, "failed to construct disconnected-path mutation"
+    with pytest.raises(AssertionError):
+        assert_advance_rm_and_env_wiring(rm, disconnected)

@@ -12,14 +12,16 @@ class {{ block_name }}_rm extends uvm_component;
     // dec in_port — self-contained: use uvm_analysis_imp to receive data directly
 {% for agent in agents %}
     `uvm_analysis_imp_decl(_from_{{ agent.name }}_agt)
-    uvm_analysis_imp_from_{{ agent.name }}_agt#(uvm_sequence_item, {{ block_name }}_rm)   m_from_{{ agent.name }}_agt_imp;
+    uvm_analysis_imp_from_{{ agent.name }}_agt#({{ agent.name }}_trans, {{ block_name }}_rm)
+        m_from_{{ agent.name }}_agt_imp;
+    uvm_analysis_port#({{ agent.name }}_trans) m_{{ agent.name }}_expected_ap;
 {% endfor %}
 
     extern function new(string name, uvm_component parent);
     extern virtual function void build_phase(uvm_phase phase);
     extern virtual task run_phase(uvm_phase phase);
 {% for agent in agents %}
-    extern virtual function void write_from_{{ agent.name }}_agt(uvm_sequence_item tr);
+    extern virtual function void write_from_{{ agent.name }}_agt({{ agent.name }}_trans tr);
 {% endfor %}
 
 endclass
@@ -32,6 +34,7 @@ function void {{ block_name }}_rm::build_phase(uvm_phase phase);
     super.build_phase(phase);
 {% for agent in agents %}
     m_from_{{ agent.name }}_agt_imp = new("m_from_{{ agent.name }}_agt_imp", this);
+    m_{{ agent.name }}_expected_ap = new("m_{{ agent.name }}_expected_ap", this);
 {% endfor %}
 endfunction
 
@@ -41,12 +44,23 @@ task {{ block_name }}_rm::run_phase(uvm_phase phase);
 endtask
 
 {% for agent in agents %}
-function void {{ block_name }}_rm::write_from_{{ agent.name }}_agt(uvm_sequence_item tr);
-    {{ agent.name }}_trans cast_tr;
-    if(!$cast(cast_tr, tr)) begin
-        `uvm_fatal(get_full_name(), $sformatf("trans type should be {{ agent.name }}_trans"));
+function void {{ block_name }}_rm::write_from_{{ agent.name }}_agt({{ agent.name }}_trans tr);
+    uvm_object cloned;
+    {{ agent.name }}_trans prediction;
+
+    if (tr == null) begin
+        m_{{ agent.name }}_expected_ap.write(null);
     end
-    // TODO: implement reference model logic for {{ agent.name }}
+    else begin
+        cloned = tr.clone();
+        if (cloned == null || !$cast(prediction, cloned)) begin
+            `uvm_error(get_full_name(), "failed to clone {{ agent.name }} prediction")
+        end
+        else begin
+            // Update prediction with reference-model behavior; never modify tr.
+            m_{{ agent.name }}_expected_ap.write(prediction);
+        end
+    end
 endfunction
 
 {% endfor %}

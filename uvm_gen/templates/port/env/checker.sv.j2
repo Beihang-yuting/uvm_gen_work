@@ -24,10 +24,28 @@ class {{ block_name }}_checker extends uvm_scoreboard;
     uvm_blocking_get_port#({{ agent.name }}_trans)   m_from_agt_{{ agent.name }}_trans_port;
 {% endfor %}
 
+{% for agent in agents %}
+    common_uvm_scb#({{ agent.name }}_trans) m_{{ agent.name }}_scb;
+{% endfor %}
+
+    int              m_active_worker_count;
+    bit              m_workers_running;
+    bit              m_run_phase_started;
+    longint unsigned m_worker_epoch;
+    longint unsigned m_worker_restart_request_epoch;
+    longint unsigned m_worker_start_ack_epoch;
+
     extern function new(string name, uvm_component parent=null);
     extern virtual function void build_phase(uvm_phase phase);
     extern virtual task run_phase(uvm_phase phase);
-    extern task fork_checker_rec_trans_task();
+    extern virtual function void reset_state();
+    extern virtual task reset_phase(uvm_phase phase);
+    extern virtual task supervise_workers();
+    extern virtual task start_workers();
+    extern virtual task stop_workers();
+    extern virtual task wait_for_workers_stopped();
+    extern virtual task request_workers_restart();
+    extern virtual task wait_for_workers_started();
 {% for agent in agents %}
     extern task process_{{ agent.name }}_trans_from_rm();
     extern task process_{{ agent.name }}_trans_from_agt();
@@ -37,6 +55,12 @@ endclass
 
 function {{ block_name }}_checker::new(string name, uvm_component parent=null);
     super.new(name, parent);
+    m_workers_running = 0;
+    m_run_phase_started = 0;
+    m_worker_epoch = 0;
+    m_worker_restart_request_epoch = 0;
+    m_worker_start_ack_epoch = 0;
+    m_active_worker_count = 0;
 {% for agent in agents %}
     m_from_rm_{{ agent.name }}_trans_cnt  = 0;
     m_from_dut_{{ agent.name }}_trans_cnt = 0;
@@ -50,48 +74,137 @@ function void {{ block_name }}_checker::build_phase(uvm_phase phase);
 {% for agent in agents %}
     m_from_rm_{{ agent.name }}_trans_port  = new("m_from_rm_{{ agent.name }}_trans_port", this);
     m_from_agt_{{ agent.name }}_trans_port = new("m_from_agt_{{ agent.name }}_trans_port", this);
+    m_{{ agent.name }}_scb = common_uvm_scb#({{ agent.name }}_trans)::type_id::create(
+        "m_{{ agent.name }}_scb", this);
 {% endfor %}
 endfunction
 
 task {{ block_name }}_checker::run_phase(uvm_phase phase);
     super.run_phase(phase);
     `uvm_info(get_full_name(), "scb run_phase start", UVM_NONE);
+    m_run_phase_started = 1;
+    this.supervise_workers();
+endtask
+
+task {{ block_name }}_checker::supervise_workers();
+    longint unsigned handled_restart_epoch;
+
+    handled_restart_epoch = m_worker_restart_request_epoch;
+    this.start_workers();
+    m_worker_start_ack_epoch = handled_restart_epoch;
+    forever begin
+        wait (m_worker_restart_request_epoch != handled_restart_epoch);
+        handled_restart_epoch = m_worker_restart_request_epoch;
+        this.start_workers();
+        m_worker_start_ack_epoch = handled_restart_epoch;
+    end
+endtask
+
+task {{ block_name }}_checker::start_workers();
+    longint unsigned launch_epoch;
+
+    if (m_workers_running) return;
+    m_workers_running = 1;
+    m_worker_epoch++;
+    launch_epoch = m_worker_epoch;
+    m_active_worker_count = 0;
     fork
-        this.fork_checker_rec_trans_task();
+{% for agent in agents %}
+        begin
+            if (launch_epoch == m_worker_epoch && m_workers_running) begin
+                m_active_worker_count++;
+                this.process_{{ agent.name }}_trans_from_rm();
+                m_active_worker_count--;
+            end
+        end
+        begin
+            if (launch_epoch == m_worker_epoch && m_workers_running) begin
+                m_active_worker_count++;
+                this.process_{{ agent.name }}_trans_from_agt();
+                m_active_worker_count--;
+            end
+        end
+{% endfor %}
     join_none
+{% if agents %}
+    wait (launch_epoch != m_worker_epoch || m_active_worker_count == {{ agents | length * 2 }});
+{% endif %}
+endtask
+
+task {{ block_name }}_checker::stop_workers();
+    m_workers_running = 0;
+    m_worker_epoch++;
+endtask
+
+task {{ block_name }}_checker::wait_for_workers_stopped();
+    wait (m_active_worker_count == 0);
+endtask
+
+task {{ block_name }}_checker::request_workers_restart();
+    m_worker_restart_request_epoch++;
+endtask
+
+task {{ block_name }}_checker::wait_for_workers_started();
+    longint unsigned requested_restart_epoch;
+
+    requested_restart_epoch = m_worker_restart_request_epoch;
+    wait (m_run_phase_started
+          && m_worker_start_ack_epoch >= requested_restart_epoch);
 endtask
 
 {% for agent in agents %}
 task {{ block_name }}_checker::process_{{ agent.name }}_trans_from_rm();
     {{ agent.name }}_trans     tr;
+    longint unsigned           worker_epoch;
     `uvm_info(get_full_name(), $sformatf("process_{{ agent.name }}_trans_from_rm start"), UVM_NONE);
     while(1) begin
+        worker_epoch = m_worker_epoch;
         this.m_from_rm_{{ agent.name }}_trans_port.get(tr);
+        if (!m_workers_running || worker_epoch != m_worker_epoch) break;
         this.m_from_rm_{{ agent.name }}_trans_cnt++;
         this.m_scb_rec_rm_trans_total_cnt++;
-        // TODO: send expected to compare queue for {{ agent.name }}
+        if (tr == null) begin
+            this.m_{{ agent.name }}_scb.push_expected(tr, '1, -1);
+        end
+        else begin
+            this.m_{{ agent.name }}_scb.push_expected(
+                tr, tr.get_scb_stream_id(), tr.get_scb_kind());
+        end
     end
 endtask
 
 task {{ block_name }}_checker::process_{{ agent.name }}_trans_from_agt();
     {{ agent.name }}_trans     tr;
+    longint unsigned           worker_epoch;
     `uvm_info(get_full_name(), $sformatf("process_{{ agent.name }}_trans_from_agt start"), UVM_NONE);
     while(1) begin
+        worker_epoch = m_worker_epoch;
         this.m_from_agt_{{ agent.name }}_trans_port.get(tr);
+        if (!m_workers_running || worker_epoch != m_worker_epoch) break;
         this.m_from_dut_{{ agent.name }}_trans_cnt++;
         this.m_scb_rec_dut_trans_total_cnt++;
-        // TODO: send actual to compare queue for {{ agent.name }}
+        if (tr == null) begin
+            this.m_{{ agent.name }}_scb.push_actual(tr, '1, -1);
+        end
+        else begin
+            this.m_{{ agent.name }}_scb.push_actual(
+                tr, tr.get_scb_stream_id(), tr.get_scb_kind());
+        end
     end
 endtask
 
 {% endfor %}
-task {{ block_name }}_checker::fork_checker_rec_trans_task();
-    fork
+
+function void {{ block_name }}_checker::reset_state();
 {% for agent in agents %}
-        this.process_{{ agent.name }}_trans_from_rm();
-        this.process_{{ agent.name }}_trans_from_agt();
+    m_{{ agent.name }}_scb.reset_state();
 {% endfor %}
-    join_none
+endfunction
+
+task {{ block_name }}_checker::reset_phase(uvm_phase phase);
+    super.reset_phase(phase);
+    // {{ block_name }}_env owns the PORT reset cut and invokes reset_state()
+    // after every FIFO worker has been quiesced and every FIFO has been flushed.
 endtask
 
 `endif

@@ -14,16 +14,21 @@ class {{ block_name }}_checker extends uvm_scoreboard;
 {% for agent in agents %}
     `uvm_analysis_imp_decl(_from_rm_{{ agent.name }})
     `uvm_analysis_imp_decl(_from_agt_{{ agent.name }})
-    uvm_analysis_imp_from_rm_{{ agent.name }}#(uvm_sequence_item, {{ block_name }}_checker)  m_from_rm_{{ agent.name }}_imp;
-    uvm_analysis_imp_from_agt_{{ agent.name }}#(uvm_sequence_item, {{ block_name }}_checker) m_from_agt_{{ agent.name }}_imp;
+    uvm_analysis_imp_from_rm_{{ agent.name }}#({{ agent.name }}_trans, {{ block_name }}_checker)
+        m_from_rm_{{ agent.name }}_imp;
+    uvm_analysis_imp_from_agt_{{ agent.name }}#({{ agent.name }}_trans, {{ block_name }}_checker)
+        m_from_agt_{{ agent.name }}_imp;
+    common_uvm_scb#({{ agent.name }}_trans) m_{{ agent.name }}_scb;
 {% endfor %}
 
     extern function new(string name, uvm_component parent=null);
     extern virtual function void build_phase(uvm_phase phase);
     extern virtual task run_phase(uvm_phase phase);
+    extern virtual function void reset_state();
+    extern virtual task reset_phase(uvm_phase phase);
 {% for agent in agents %}
-    extern virtual function void write_from_rm_{{ agent.name }}(uvm_sequence_item tr);
-    extern virtual function void write_from_agt_{{ agent.name }}(uvm_sequence_item tr);
+    extern virtual function void write_from_rm_{{ agent.name }}({{ agent.name }}_trans tr);
+    extern virtual function void write_from_agt_{{ agent.name }}({{ agent.name }}_trans tr);
 {% endfor %}
 
 endclass
@@ -39,6 +44,8 @@ function void {{ block_name }}_checker::build_phase(uvm_phase phase);
 {% for agent in agents %}
     m_from_rm_{{ agent.name }}_imp  = new("m_from_rm_{{ agent.name }}_imp", this);
     m_from_agt_{{ agent.name }}_imp = new("m_from_agt_{{ agent.name }}_imp", this);
+    m_{{ agent.name }}_scb = common_uvm_scb#({{ agent.name }}_trans)::type_id::create(
+        "m_{{ agent.name }}_scb", this);
 {% endfor %}
 endfunction
 
@@ -48,23 +55,38 @@ task {{ block_name }}_checker::run_phase(uvm_phase phase);
 endtask
 
 {% for agent in agents %}
-function void {{ block_name }}_checker::write_from_rm_{{ agent.name }}(uvm_sequence_item tr);
-    {{ agent.name }}_trans cast_tr;
-    if(!$cast(cast_tr, tr)) begin
-        `uvm_fatal(get_full_name(), "trans type from rm should be {{ agent.name }}_trans");
-    end
+function void {{ block_name }}_checker::write_from_rm_{{ agent.name }}({{ agent.name }}_trans tr);
     m_scb_rec_rm_trans_total_cnt++;
-    // TODO: compare expected vs actual for {{ agent.name }}
+    if (tr == null) begin
+        m_{{ agent.name }}_scb.push_expected(tr, '1, -1);
+    end
+    else begin
+        m_{{ agent.name }}_scb.push_expected(
+            tr, tr.get_scb_stream_id(), tr.get_scb_kind());
+    end
 endfunction
 
-function void {{ block_name }}_checker::write_from_agt_{{ agent.name }}(uvm_sequence_item tr);
-    {{ agent.name }}_trans cast_tr;
-    if(!$cast(cast_tr, tr)) begin
-        `uvm_fatal(get_full_name(), "trans type from agt should be {{ agent.name }}_trans");
-    end
+function void {{ block_name }}_checker::write_from_agt_{{ agent.name }}({{ agent.name }}_trans tr);
     m_scb_rec_dut_trans_total_cnt++;
-    // TODO: send actual to compare queue for {{ agent.name }}
+    if (tr == null) begin
+        m_{{ agent.name }}_scb.push_actual(tr, '1, -1);
+    end
+    else begin
+        m_{{ agent.name }}_scb.push_actual(
+            tr, tr.get_scb_stream_id(), tr.get_scb_kind());
+    end
 endfunction
 
 {% endfor %}
+function void {{ block_name }}_checker::reset_state();
+{% for agent in agents %}
+    m_{{ agent.name }}_scb.reset_state();
+{% endfor %}
+endfunction
+
+task {{ block_name }}_checker::reset_phase(uvm_phase phase);
+    super.reset_phase(phase);
+    reset_state();
+endtask
+
 `endif
