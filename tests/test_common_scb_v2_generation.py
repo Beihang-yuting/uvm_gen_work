@@ -963,6 +963,30 @@ def test_v2_vcs_semantic_assets_cover_runtime_contract():
         harness,
     )
     assert "17 * expected_cfg_warn" in harness
+    cfg_invalid_client = r'"uvm_test_top\.m_cfg_invalid"'
+    assert re.search(
+        r"m_catcher\.count\(\s*"
+        + cfg_invalid_client
+        + r'\s*,\s*"SCB_CFG"\s*\)\s*==\s*1\s*\+\s*expected_cfg_warn',
+        harness,
+    ), "missing client-scoped configured/plusarg warning count assertion"
+    assert re.search(
+        r"m_catcher\.message_at\(\s*"
+        + cfg_invalid_client
+        + r'\s*,\s*"SCB_CFG"\s*,\s*0\s*\)\s*==\s*'
+        r'"configured m_report_limit=-2 is below -1; using 10"',
+        harness,
+    ), "missing exact ordinal-0 configured warning assertion"
+    assert re.search(
+        r"if\s*\(\s*expected_cfg_warn\s*!=\s*0\s*\)\s*"
+        r"unit_check\s*\(\s*m_catcher\.message_at\(\s*"
+        + cfg_invalid_client
+        + r'\s*,\s*"SCB_CFG"\s*,\s*1\s*\)\s*==\s*'
+        r'\$sformatf\(\s*'
+        r'"invalid SCB_REPORT_LIMIT=\'%s\'; ignoring override"\s*,\s*'
+        r"expected_cfg_text\s*\)",
+        harness,
+    ), "missing exact ordinal-1 invalid-plusarg warning assertion"
     assert "does not copy the transaction or take ownership" in readme
     assert "retains the original producer-owned transaction handle" in readme
     assert "Callers must keep that handle stable" in readme

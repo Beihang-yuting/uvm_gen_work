@@ -1165,6 +1165,7 @@ module common_scb_unit_tb;
             int expected_limit;
             int expected_cfg_warn;
             int expected_config_warn;
+            string expected_cfg_text;
             int expected_shown;
             int expected_omitted;
             int report_count;
@@ -1177,12 +1178,34 @@ module common_scb_unit_tb;
             unit_check($value$plusargs(
                       "SCB_EXPECT_CONFIG_WARN=%d", expected_config_warn),
                   "runner did not provide SCB_EXPECT_CONFIG_WARN");
+            expected_cfg_text = "";
+            if (expected_cfg_warn != 0) begin
+                unit_check($value$plusargs(
+                          "SCB_EXPECT_CFG_TEXT=%s", expected_cfg_text),
+                      "runner did not provide SCB_EXPECT_CFG_TEXT");
+                if (expected_cfg_text == "__EMPTY__")
+                    expected_cfg_text = "";
+            end
             unit_check(m_many.m_cfg.m_report_limit == expected_limit,
                   $sformatf("report limit=%0d expected=%0d",
                             m_many.m_cfg.m_report_limit, expected_limit));
             unit_check(m_catcher.count_id("SCB_CFG")
                       == expected_config_warn + (17 * expected_cfg_warn),
                   "SCB_CFG warning count does not include configured and plusarg warnings");
+            unit_check(m_catcher.count("uvm_test_top.m_cfg_invalid", "SCB_CFG")
+                      == 1 + expected_cfg_warn,
+                  "m_cfg_invalid configured/plusarg warning count mismatch");
+            unit_check(m_catcher.message_at(
+                          "uvm_test_top.m_cfg_invalid", "SCB_CFG", 0)
+                      == "configured m_report_limit=-2 is below -1; using 10",
+                  "m_cfg_invalid configured warning is not ordinal zero");
+            if (expected_cfg_warn != 0)
+                unit_check(m_catcher.message_at(
+                              "uvm_test_top.m_cfg_invalid", "SCB_CFG", 1)
+                          == $sformatf(
+                              "invalid SCB_REPORT_LIMIT='%s'; ignoring override",
+                              expected_cfg_text),
+                      "m_cfg_invalid invalid-plusarg warning is not ordinal one");
 
             expected_shown = (expected_limit == -1) ? 15 : expected_limit;
             if (expected_shown > 15) expected_shown = 15;
