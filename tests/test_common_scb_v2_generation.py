@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -206,23 +207,10 @@ def assert_aip_adapter_contract(adapter_raw: str) -> None:
         ),
         "exact integer parser",
     )
-    parser_guards = (
-        r"text\.len\s*\(\s*\)\s*==\s*0",
-        r"text\s*\[\s*0\s*\]\s*==\s*\"\+\"",
-        r"text\s*\[\s*0\s*\]\s*==\s*\"-\"",
-        r"index\s*==\s*text\.len\s*\(\s*\)",
-        r"text\s*\[\s*i\s*\].*\[\s*\"0\"\s*:\s*\"9\"\s*\]",
-        r"64'd2147483648",
-        r"64'd2147483647",
-        r"magnitude\s*>\s*\(\s*max_magnitude\s*-\s*digit\s*\)\s*/\s*10",
-    )
-    for guard in parser_guards:
-        assert re.search(guard, parser, flags=re.DOTALL), (
-            f"missing exact integer parser guard: {guard}"
-        )
-    assert not re.search(r"\$sscanf|\.atoi\s*\(|parse_int_arg", parser), (
-        "adapter must not use prefix-accepting or truncating integer parsers"
-    )
+    assert re.fullmatch(
+        r"\s*return\s+common_scb_parse_int_exact\s*\(\s*text\s*,\s*value\s*\)\s*;\s*",
+        parser,
+    ), "adapter parser wrapper must only delegate to the shared utility"
 
     list_body = adapter_task_body(adapter, "list")
     assert re.search(r"common_scb_registry::get_names\s*\(\s*names\s*\)", list_body)
@@ -800,6 +788,10 @@ def test_aip_adapter_registration_contract_rejects_mutations():
         file_name="common_scb_aip_adapter.sv",
     )
     mutations = {
+        "parser wrapper bypasses shared utility": (
+            r"return\s+common_scb_parse_int_exact\s*\(\s*text\s*,\s*value\s*\)\s*;",
+            r'return $sscanf(text, "%d", value) == 1;',
+        ),
         "wrong report sentinel": (
             r"(name\s*,\s*\"\"\s*,\s*limit\s*,\s*)\"-2\"",
             r'\1"-1"',
@@ -902,6 +894,110 @@ def test_aip_adapter_vcs_behavioral_assets_cover_runtime_contract():
     assert "common_lib_pkg.f" in runner
 
 
+def test_v2_vcs_semantic_assets_cover_runtime_contract():
+    repository = Path(__file__).parent.parent
+    harness_path = repository / "tests/vcs/common_scb_unit_tb.sv"
+    runner_path = repository / "tests/vcs/run_common_scb_v2.sh"
+    assert harness_path.is_file(), "missing scoreboard v2 VCS semantic harness"
+    assert runner_path.is_file(), "missing scoreboard v2 VCS semantic runner"
+
+    harness = harness_path.read_text(encoding="utf-8")
+    runner = runner_path.read_text(encoding="utf-8")
+    for contract in (
+        "SCB_UNIT_PASS",
+        "uvm_report_catcher",
+        "common_scb_reporter",
+        "class scb_report_expectation",
+        "expect_report(",
+        "unexpected_guarded_events",
+        "all_expectations_consumed",
+        "m_cfg_seven",
+        "m_cfg_invalid",
+        "uvm_config_db#(common_uvm_scb_cfg)::set",
+        "SCB_EXPECT_CFG_TEXT",
+        "m_reset_counters",
+        "probe_finalize_pending()",
+        "reset_state(0)",
+        "reset_state(1)",
+        "print_report(-1)",
+        "m_report_en = 0",
+        "64'hf000_0000_0000_0001",
+    ):
+        assert contract in harness
+
+    assert runner_path.stat().st_mode & 0o111, "scoreboard v2 runner is not executable"
+    for mode in (
+        "+SCB_REPORT_LIMIT=0",
+        "+SCB_REPORT_LIMIT=-1",
+        "+SCB_REPORT_LIMIT=20",
+        "+SCB_REPORT_LIMIT=-2",
+        "+SCB_REPORT_LIMIT=malformed",
+        "+SCB_REPORT_LIMIT=+17",
+        "+SCB_REPORT_LIMIT=2147483647",
+        "+SCB_REPORT_LIMIT=2147483648",
+        "+SCB_REPORT_LIMIT=1junk",
+        '"+SCB_REPORT_LIMIT="',
+        '"+SCB_REPORT_LIMIT=+"',
+        "+SCB_REPORT_LIMIT=-",
+        "+SCB_REPORT_LIMIT=9999999999999999999999999999999999999999",
+    ):
+        assert mode in runner
+    for gate in (
+        "timeout --kill-after",
+        "SCB_UNIT_PASS",
+        "SCB_UNIT_FAIL",
+        "UVM_ERROR",
+        "UVM_FATAL",
+    ):
+        assert gate in runner
+
+
+def test_v2_vcs_runner_rejects_ambiguous_uvm_logs(tmp_path):
+    runner = Path(__file__).parent.parent / "tests/vcs/run_common_scb_v2.sh"
+
+    def validate(name: str, contents: str) -> subprocess.CompletedProcess[str]:
+        log = tmp_path / name
+        log.write_text(contents, encoding="utf-8")
+        return subprocess.run(
+            [str(runner), "--validate-log", str(log)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    clean = validate(
+        "clean.log",
+        "ordinary output\nUVM_ERROR : 0\nUVM_FATAL : 0\n",
+    )
+    assert clean.returncode == 0, clean.stderr
+
+    ansi_clean = validate(
+        "ansi-clean.log",
+        "\x1b[31mUVM_ERROR : 0\x1b[0m\r\n"
+        "\x1b[32mUVM_FATAL : 0\x1b[0m\r\n",
+    )
+    assert ansi_clean.returncode == 0, ansi_clean.stderr
+
+    mixed = validate(
+        "mixed.log",
+        "UVM_ERROR : 0\nUVM_ERROR : 3\nUVM_FATAL : 0\n",
+    )
+    assert mixed.returncode != 0
+
+    source_error = validate(
+        "source-error.log",
+        "UVM_ERROR file.sv(12) @ 0: top [INJECTED] unexpected\n"
+        "UVM_ERROR : 0\nUVM_FATAL : 0\n",
+    )
+    assert source_error.returncode != 0
+
+    duplicate = validate(
+        "duplicate.log",
+        "UVM_ERROR : 0\nUVM_ERROR : 0\nUVM_FATAL : 0\n",
+    )
+    assert duplicate.returncode != 0
+
+
 def test_v2_types_expose_approved_defaults(tmp_path, platform_type):
     project = generate(tmp_path, platform_type)
     types_path = project / "common/common_scb_types.sv"
@@ -998,7 +1094,7 @@ def test_v2_core_clones_and_bounds_pending_state(tmp_path, platform_type):
         "$cast(retained, cloned)",
         "m_pending_limit",
         "SCB_PENDING_OVERFLOW",
-        "SCB_REPORT_LIMIT=%d",
+        "SCB_REPORT_LIMIT=%s",
     ]
     missing_admission = [item for item in required_admission if item not in core]
     assert not missing_admission, (

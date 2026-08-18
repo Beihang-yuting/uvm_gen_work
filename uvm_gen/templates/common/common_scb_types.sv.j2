@@ -10,6 +10,46 @@ typedef enum int {
 
 typedef enum int {SCB_PASS, SCB_WARN, SCB_FAIL} scb_status_e;
 
+function automatic bit common_scb_parse_int_exact(string text,
+                                                   output int value);
+    int index;
+    int i;
+    int digit;
+    bit negative;
+    longint unsigned magnitude;
+    longint unsigned max_magnitude;
+
+    value = 0;
+    if (text.len() == 0) return 0;
+
+    index = 0;
+    negative = 0;
+    if ((text[0] == "+") || (text[0] == "-")) begin
+        negative = (text[0] == "-");
+        index = 1;
+    end
+    if (index == text.len()) return 0;
+
+    magnitude = 0;
+    max_magnitude = negative ? 64'd2147483648 : 64'd2147483647;
+    for (i = index; i < text.len(); i++) begin
+        if (!(text[i] inside {["0":"9"]})) return 0;
+        digit = text[i] - "0";
+        if (magnitude > (max_magnitude - digit) / 10) return 0;
+        magnitude = (magnitude * 10) + digit;
+    end
+
+    if (negative) begin
+        if (magnitude == 64'd2147483648)
+            value = -2147483647 - 1;
+        else
+            value = -int'(magnitude);
+    end else begin
+        value = int'(magnitude);
+    end
+    return 1;
+endfunction
+
 class common_uvm_scb_cfg extends uvm_object;
     `uvm_object_utils(common_uvm_scb_cfg)
     common_scb_cmp_mode_e m_cmp_mode = SCB_UNORDERED;

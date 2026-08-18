@@ -150,6 +150,7 @@ endfunction
 function void common_uvm_scb::build_phase(uvm_phase phase);
     common_uvm_scb_cfg configured;
     int value;
+    string value_text;
     super.build_phase(phase);
     if ((STREAM_ID_WIDTH < 1) || (STREAM_ID_WIDTH > 64))
         `uvm_fatal("SCB_CFG",
@@ -161,14 +162,16 @@ function void common_uvm_scb::build_phase(uvm_phase phase);
         else
             `uvm_warning("SCB_CFG", "null cfg override ignored; using default")
     end
-    if ($value$plusargs("SCB_REPORT_LIMIT=%d", value)) begin
-        if (value >= -1)
+    if ($test$plusargs("SCB_REPORT_LIMIT=")) begin
+        value_text = "";
+        if ($value$plusargs("SCB_REPORT_LIMIT=%s", value_text)
+            && common_scb_parse_int_exact(value_text, value)
+            && (value >= -1))
             m_cfg.m_report_limit = value;
-        else begin
+        else
             `uvm_warning("SCB_CFG",
-                         $sformatf("invalid SCB_REPORT_LIMIT=%0d; using 10", value))
-            m_cfg.m_report_limit = value;
-        end
+                         $sformatf("invalid SCB_REPORT_LIMIT='%s'; ignoring override",
+                                   value_text))
     end
     if (m_cfg.m_report_limit < -1)
         m_cfg.m_report_limit = 10;

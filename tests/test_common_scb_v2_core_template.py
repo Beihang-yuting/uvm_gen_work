@@ -650,6 +650,56 @@ def assert_vcs_portable_match_counter(types_raw: str, core_raw: str) -> None:
     )
 
 
+def assert_shared_int32_parser_contract(types_raw: str, core_raw: str) -> None:
+    types = strip_sv_comments(types_raw)
+    core = strip_sv_comments(core_raw)
+    parser = core_method_body(
+        types,
+        r"function\s+automatic\s+bit\s+common_scb_parse_int_exact\s*\([^;]+\)",
+        "shared exact int32 parser",
+    )
+    parser_guards = (
+        r"text\.len\s*\(\s*\)\s*==\s*0",
+        r"text\s*\[\s*0\s*\]\s*==\s*\"\+\"",
+        r"text\s*\[\s*0\s*\]\s*==\s*\"-\"",
+        r"index\s*==\s*text\.len\s*\(\s*\)",
+        r"text\s*\[\s*i\s*\].*\[\s*\"0\"\s*:\s*\"9\"\s*\]",
+        r"64'd2147483648",
+        r"64'd2147483647",
+        r"magnitude\s*>\s*\(\s*max_magnitude\s*-\s*digit\s*\)\s*/\s*10",
+    )
+    for guard in parser_guards:
+        assert re.search(guard, parser, flags=re.DOTALL), (
+            f"missing shared exact int32 parser guard: {guard}"
+        )
+    assert not re.search(r"\$sscanf|\.atoi\s*\(|parse_int_arg", parser), (
+        "shared parser must not use prefix-accepting or truncating conversion"
+    )
+    assert len(re.findall(
+        r"function\s+(?:automatic\s+)?bit\s+common_scb_parse_int_exact\s*\(",
+        types + core,
+    )) == 1, "shared exact int32 parser must have one implementation"
+    assert not re.search(
+        r"common_uvm_scb::parse_int_exact|extern\s+protected\s+"
+        r"function\s+bit\s+parse_int_exact",
+        core,
+    )
+
+    build = core_method_body(
+        core,
+        r"function\s+void\s+common_uvm_scb::build_phase\s*\([^;]+\)",
+        "build_phase",
+    )
+    assert re.search(
+        r"common_scb_parse_int_exact\s*\(\s*value_text\s*,\s*value\s*\)",
+        build,
+    ), "core plusarg parsing must use the shared exact int32 parser"
+    assert not re.search(r"\$sscanf|\.atoi\s*\(|parse_int_arg", build)
+    assert not re.search(r"\baip_|AIP_", types_raw), (
+        "shared parser/types template must remain AIP-independent"
+    )
+
+
 def render_task6_sources() -> tuple[str, str]:
     config = ProjectConfig(
         block_name="top",
@@ -866,6 +916,7 @@ def assert_core_contract(core_raw: str) -> None:
         [
             ("configured declaration", r"^[ \t]*common_uvm_scb_cfg\s+configured\s*;"),
             ("plusarg value declaration", r"^[ \t]*int\s+value\s*;"),
+            ("plusarg text declaration", r"^[ \t]*string\s+value_text\s*;"),
             ("parent build", r"super\.build_phase\s*\(\s*phase\s*\)\s*;"),
             (
                 "stream-width range guard",
@@ -881,11 +932,23 @@ def assert_core_contract(core_raw: str) -> None:
             ("config override assignment", r"m_cfg\s*=\s*configured\s*;"),
             ("null config warning", r"null cfg override ignored; using default"),
             (
-                "report plusarg only",
-                r"\$value\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=%d\"\s*,\s*value\s*\)",
+                "report plusarg presence",
+                r"\$test\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=\"\s*\)",
             ),
-            ("accepted report bound", r"if\s*\(\s*value\s*>=\s*-1\s*\)"),
-            ("invalid plusarg warning", r"invalid SCB_REPORT_LIMIT=%0d; using 10"),
+            (
+                "raw report plusarg",
+                r"\$value\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=%s\"\s*,\s*"
+                r"value_text\s*\)",
+            ),
+            (
+                "strict report parse",
+                r"common_scb_parse_int_exact\s*\(\s*value_text\s*,\s*value\s*\)",
+            ),
+            ("accepted report bound", r"value\s*>=\s*-1"),
+            (
+                "invalid plusarg warning",
+                r"invalid SCB_REPORT_LIMIT='%s'; ignoring override",
+            ),
             ("report normalization", r"m_cfg\.m_report_limit\s*<\s*-1"),
             ("error-limit normalization", r"m_cfg\.m_err_limit\s*<\s*0"),
             ("pending-limit normalization", r"m_cfg\.m_pending_limit\s*<\s*0"),
@@ -919,20 +982,24 @@ def assert_core_contract(core_raw: str) -> None:
     )
 
     invalid_plusarg_branch = re.search(
-        r"if\s*\(\s*\$value\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=%d\"\s*,\s*"
-        r"value\s*\)\s*\)\s*begin\s*if\s*\(\s*value\s*>=\s*-1\s*\)\s*"
-        r"m_cfg\.m_report_limit\s*=\s*value\s*;\s*else\s*begin\s*"
+        r"if\s*\(\s*\$test\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=\"\s*\)\s*\)\s*"
+        r"begin\s*value_text\s*=\s*\"\"\s*;\s*if\s*\(\s*"
+        r"\$value\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=%s\"\s*,\s*value_text\s*\)\s*"
+        r"&&\s*common_scb_parse_int_exact\s*\(\s*value_text\s*,\s*value\s*\)\s*"
+        r"&&\s*\(\s*value\s*>=\s*-1\s*\)\s*\)\s*"
+        r"m_cfg\.m_report_limit\s*=\s*value\s*;\s*else\s*"
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
-        r"\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*value\s*\)\s*\)\s*"
-        r"m_cfg\.m_report_limit\s*=\s*value\s*;\s*end\s*end",
+        r"\"invalid SCB_REPORT_LIMIT='%s'; ignoring override\"\s*,\s*"
+        r"value_text\s*\)\s*\)\s*end",
         build,
     )
     assert invalid_plusarg_branch, (
-        "invalid report plusargs must store the invalid value for common fallback normalization"
+        "invalid report plusargs must warn once without overwriting constructor/config_db state"
     )
     invalid_report_warning = (
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
-        r"\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*value\s*\)\s*\)"
+        r"\"invalid SCB_REPORT_LIMIT='%s'; ignoring override\"\s*,\s*"
+        r"value_text\s*\)\s*\)"
     )
     error_limit_warning = (
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
@@ -1419,6 +1486,17 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
 
     assert_core_contract(core_raw)
     assert_vcs_portable_match_counter(types_raw, core_raw)
+    assert_shared_int32_parser_contract(types_raw, core_raw)
+
+    permissive_core, replacements = re.subn(
+        r"common_scb_parse_int_exact\s*\(\s*value_text\s*,\s*value\s*\)",
+        r'$sscanf(value_text, "%d", value) == 1',
+        core_raw,
+        count=1,
+    )
+    assert replacements == 1, "failed to construct permissive core parser mutation"
+    with pytest.raises(AssertionError):
+        assert_shared_int32_parser_contract(types_raw, permissive_core)
 
     mutations = {
         "default transaction type": (
@@ -1432,11 +1510,11 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
             r"if (uvm_config_db#(common_uvm_scb_cfg)::get(this, \"\", \"cfg\", configured))\n"
             r"        m_cfg = configured;",
         ),
-        "invalid plusarg does not force common fallback": (
-            r"(?s)(else begin\s*`uvm_warning\(\"SCB_CFG\",\s*"
-            r"\$sformatf\(\"invalid SCB_REPORT_LIMIT=%0d; using 10\", value\)\))\s*"
-            r"m_cfg\.m_report_limit = value;",
-            r"\1",
+        "invalid plusarg overwrites configured report limit": (
+            r"(?s)(else\s*`uvm_warning\(\"SCB_CFG\",\s*"
+            r"\$sformatf\(\"invalid SCB_REPORT_LIMIT='%s'; ignoring override\",\s*"
+            r"value_text\)\))",
+            r"\1\n        m_cfg.m_report_limit = -2;",
         ),
         "missing stream width guard": (
             r"(?s)if \(\(STREAM_ID_WIDTH < 1\) \|\| \(STREAM_ID_WIDTH > 64\)\)\s*"
@@ -1540,9 +1618,9 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
             "if (1) begin",
         ),
         "extra report warning and early assignment": (
-            r"(?s)else begin\s*(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
-            r"\$sformatf\s*\(\s*\"invalid SCB_REPORT_LIMIT=%0d; using 10\"\s*,\s*"
-            r"value\s*\)\s*\))\s*m_cfg\.m_report_limit\s*=\s*value\s*;\s*end\s*end\s*"
+            r"(?s)else\s*(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+            r"\$sformatf\s*\(\s*\"invalid SCB_REPORT_LIMIT='%s'; ignoring override\"\s*,\s*"
+            r"value_text\s*\)\s*\))\s*end\s*"
             r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*"
             r"m_cfg\.m_report_limit\s*=\s*10\s*;",
             r"else begin\n            \g<warning>\n"
