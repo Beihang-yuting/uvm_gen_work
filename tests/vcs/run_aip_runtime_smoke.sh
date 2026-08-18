@@ -123,35 +123,62 @@ verify_success_log() (
     fi
 )
 
-verify_compile_logs() {
+verify_compile_logs() (
     local label=$1
     local compile_log=$2
     local console_log=$3
+    local normalized_compile=""
+    local normalized_console=""
 
     if [[ ! -s ${compile_log} || ! -s ${console_log} ]]; then
         printf 'AIP runtime compile for %s: fresh compile log/console missing or empty\n' \
             "${label}" >&2
         return 1
     fi
+
+    cleanup_normalized_compile_logs() {
+        if [[ -n ${normalized_compile} ]]; then
+            rm -f -- "${normalized_compile}"
+        fi
+        if [[ -n ${normalized_console} ]]; then
+            rm -f -- "${normalized_console}"
+        fi
+    }
+    trap cleanup_normalized_compile_logs EXIT
+    normalized_compile=$(mktemp "${TMPDIR:-/tmp}/aip-compile-log.XXXXXX")
+    normalized_console=$(mktemp "${TMPDIR:-/tmp}/aip-compile-log.XXXXXX")
+    sed -E $'s/\033\\[[0-?]*[ -\\/]*[@-~]//g; s/\r$//' \
+        -- "${compile_log}" >"${normalized_compile}"
+    sed -E $'s/\033\\[[0-?]*[ -\\/]*[@-~]//g; s/\r$//' \
+        -- "${console_log}" >"${normalized_console}"
+
     if grep -Eq '\{\{|\}\}|\{%|%\}|\{#|#\}' \
-            "${compile_log}" "${console_log}"; then
+            "${normalized_compile}" "${normalized_console}"; then
         printf 'AIP runtime compile for %s: unresolved Jinja token present\n' \
             "${label}" >&2
         return 1
     fi
-    if grep -Eq '\[(ERROR|FATAL)\]' "${compile_log}" "${console_log}"; then
+    if grep -Eiq \
+            '^[[:space:]]*(ERROR|FATAL):|^[[:space:]]*UVM_(ERROR|FATAL)([[:space:]:@]|$)' \
+            "${normalized_compile}" "${normalized_console}"; then
+        printf 'AIP runtime compile for %s: generic error/fatal or UVM diagnostic present\n' \
+            "${label}" >&2
+        return 1
+    fi
+    if grep -Eq '\[(ERROR|FATAL)\]' \
+            "${normalized_compile}" "${normalized_console}"; then
         printf 'AIP runtime compile for %s: AIP [ERROR]/[FATAL] diagnostic present\n' \
             "${label}" >&2
         return 1
     fi
     if grep -Eiq \
         'Error-\[[^]]+\]|syntax[[:space:]]+error|undefined[[:space:]]+(macro|type|variable|identifier|symbol|package|class)|unknown[[:space:]]+(macro|type|package|class)|unresolved[[:space:]]+(type|reference|name|symbol|package|hierarchical)|cross-module[[:space:]]+reference[[:space:]]+resolution[[:space:]]+error|identifier[^[:cntrl:]]*not[[:space:]]+declared|not[[:space:]]+declared' \
-        "${compile_log}" "${console_log}"; then
+        "${normalized_compile}" "${normalized_console}"; then
         printf 'AIP runtime compile for %s: VCS syntax/type/unresolved diagnostic present\n' \
             "${label}" >&2
         return 1
     fi
-}
+)
 
 if (($# > 0)); then
     case $1 in
@@ -170,6 +197,10 @@ if (($# > 0)); then
             fi
             verify_compile_logs "$2" "$3" "$4"
             exit $?
+            ;;
+        -*)
+            usage
+            exit 2
             ;;
     esac
 fi

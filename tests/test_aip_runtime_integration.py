@@ -630,8 +630,10 @@ def test_aip_runtime_validator_rejects_adversarial_logs(tmp_path):
 
 
 def test_aip_compile_validator_rejects_synthetic_diagnostics(tmp_path):
-    clean_compile = "Chronologic VCS simulator compiler output\n"
-    clean_console = "Compiler version and elapsed time\n"
+    clean_compile = "\x1b[36mChronologic VCS simulator compiler output\x1b[0m\r\n"
+    clean_console = "\x1b[32mCompiler version and elapsed time\x1b[0m\r\n"
+    validator_tmp = tmp_path / "validator tmp"
+    validator_tmp.mkdir()
 
     def validate(name: str, compile_contents: str, console_contents: str):
         compile_log = tmp_path / f"{name}.compile.log"
@@ -639,6 +641,8 @@ def test_aip_compile_validator_rejects_synthetic_diagnostics(tmp_path):
         compile_log.write_text(compile_contents, encoding="utf-8")
         console_log.write_text(console_contents, encoding="utf-8")
         originals = (compile_log.read_bytes(), console_log.read_bytes())
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(validator_tmp)
         completed = subprocess.run(
             [
                 str(AIP_RUNTIME_RUNNER),
@@ -650,12 +654,19 @@ def test_aip_compile_validator_rejects_synthetic_diagnostics(tmp_path):
             check=False,
             capture_output=True,
             text=True,
+            env=environment,
         )
         assert (compile_log.read_bytes(), console_log.read_bytes()) == originals
         return completed
 
     clean = validate("clean", clean_compile, clean_console)
     assert clean.returncode == 0, clean.stderr
+    benign = validate(
+        "benign-prose",
+        clean_compile + "summary: no error or fatal diagnostics were emitted\n",
+        clean_console,
+    )
+    assert benign.returncode == 0, benign.stderr
 
     mutations = {
         "empty-compile": ("", clean_console),
@@ -664,6 +675,20 @@ def test_aip_compile_validator_rejects_synthetic_diagnostics(tmp_path):
         "jinja-console": (clean_compile, clean_console + "{% broken %}\n"),
         "aip-error": (clean_compile + "[ERROR] AIP package rejected\n", clean_console),
         "aip-fatal": (clean_compile, clean_console + "[FATAL] AIP compile stopped\n"),
+        "plain-error": (clean_compile + "Error: compile failed\n", clean_console),
+        "plain-fatal": (clean_compile, clean_console + "Fatal: compile stopped\n"),
+        "ansi-plain-error": (
+            clean_compile + "\x1b[31mError: hidden compile failure\x1b[0m\r\n",
+            clean_console,
+        ),
+        "uvm-error": (
+            clean_compile + "UVM_ERROR file.sv(4): compile-time diagnostic\n",
+            clean_console,
+        ),
+        "uvm-fatal": (
+            clean_compile,
+            clean_console + "UVM_FATAL @ 0: compile-time diagnostic\n",
+        ),
         "vcs-syntax": (
             clean_compile + "Error-[SE] Syntax error in source file\n",
             clean_console,
@@ -687,6 +712,7 @@ def test_aip_compile_validator_rejects_synthetic_diagnostics(tmp_path):
     for name, (compile_contents, console_contents) in mutations.items():
         rejected = validate(name, compile_contents, console_contents)
         assert rejected.returncode != 0, f"accepted {name} compile diagnostic"
+    assert not list(validator_tmp.glob("aip-compile-log.*"))
 
 
 def test_vcs_runtime_gate_rejects_zero_exit_compile_diagnostic(tmp_path):
@@ -731,7 +757,7 @@ def test_vcs_runtime_gate_rejects_zero_exit_compile_diagnostic(tmp_path):
             esac
         done
         [[ -n ${compile_log} ]]
-        printf 'Error-[SE] Syntax error injected despite exit zero\\n' > "${compile_log}"
+        printf 'Error: generic compile failure injected despite exit zero\\n' > "${compile_log}"
         printf 'compiler console output\\n'
         cat > "${simv}" <<'SIMV'
         #!/usr/bin/env bash
@@ -767,7 +793,29 @@ def test_vcs_runtime_gate_rejects_zero_exit_compile_diagnostic(tmp_path):
     )
 
     assert completed.returncode != 0
-    assert "VCS syntax/type/unresolved diagnostic present" in completed.stderr
+    assert "generic error/fatal or UVM diagnostic present" in completed.stderr
+
+
+def test_vcs_runtime_gate_rejects_unknown_option_without_workflow_side_effect():
+    completed = subprocess.run(
+        [
+            "bash",
+            str(AIP_RUNTIME_RUNNER),
+            "--bogus",
+            "a",
+            "b",
+            "c",
+            "d",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stderr.startswith("Usage:")
+    assert "cd:" not in completed.stderr
+    assert "AIP runtime" not in completed.stderr
 
 
 def test_vcs_runtime_gate_requires_fresh_executable(tmp_path):
