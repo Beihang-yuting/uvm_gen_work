@@ -10,6 +10,12 @@ from uvm_gen.config import AgentConfig, PlatformType, ProjectConfig
 from uvm_gen.generators.platform import PlatformGenerator
 
 
+REPOSITORY = Path(__file__).resolve().parents[1]
+GENERATED_SCB_MATRIX_RUNNER = REPOSITORY / "tests/vcs/run_generated_scb_matrix.sh"
+SCB_ADAPTER_SMOKE_TCL = REPOSITORY / "tests/vcs/scb_adapter_smoke.tcl"
+SCOREBOARD_PATH = "uvm_test_top.m_env.m_scb.m_axi_scb"
+
+
 @pytest.fixture(
     params=[PlatformType.ADVANCE, PlatformType.PORT],
     ids=lambda platform_type: platform_type.value,
@@ -184,6 +190,353 @@ def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):
         "end_test idle=1us timeout=10us",
         "run",
     ]
+
+
+def test_generated_scb_matrix_assets_cover_runtime_contract():
+    assert GENERATED_SCB_MATRIX_RUNNER.is_file(), (
+        "missing generated-project scoreboard VCS matrix runner"
+    )
+    assert SCB_ADAPTER_SMOKE_TCL.is_file(), "missing scoreboard AIP Tcl smoke"
+    assert GENERATED_SCB_MATRIX_RUNNER.stat().st_mode & 0o111, (
+        "generated-project scoreboard VCS matrix runner is not executable"
+    )
+
+    runner = GENERATED_SCB_MATRIX_RUNNER.read_text(encoding="utf-8")
+    smoke = SCB_ADAPTER_SMOKE_TCL.read_text(encoding="utf-8")
+    for contract in (
+        "--validate-log",
+        "realpath --",
+        "timeout --kill-after",
+        "-full64",
+        "-sverilog",
+        "-ntb_opts uvm-1.2",
+        "-timescale=1ns/1ps",
+        "-f tb.f",
+        "-top harness",
+        "+UVM_TESTNAME=tc_base",
+        "+UVM_TESTNAME=tc_tcl",
+        "-ucli",
+        "TC PASSED",
+        "TC FAILED.",
+        "UVM_ERROR",
+        "UVM_FATAL",
+        "[ERROR]",
+        "SCB_ADAPTER_SMOKE",
+        SCOREBOARD_PATH,
+        "validate_aip_off_tree",
+        "unset AIP_CORE_HOME",
+        "trap cleanup_normalized_log EXIT",
+    ):
+        assert contract in runner
+
+    for invocation in (
+        "scb_list",
+        f"scb_status name={SCOREBOARD_PATH}",
+        f"scb_report name={SCOREBOARD_PATH} limit=0",
+        f"scb_set_limit name={SCOREBOARD_PATH} limit=-1",
+        "end_test idle=1us timeout=10us",
+    ):
+        assert invocation in smoke
+    assert smoke.count('puts "SCB_ADAPTER_SMOKE command=') == 5
+    assert "scb_clear" not in smoke
+    assert "reset_state" not in smoke
+
+
+def test_generated_scb_matrix_validator_rejects_runtime_mutations(tmp_path):
+    clean_status_marker = (
+        "SCB_ADAPTER_SMOKE command=scb_status status=0 "
+        "result=status=SCB_PASS expected=0 actual=0 match=0 mismatch=0 "
+        "drop=0 unexpected=0 pending_expected=0 pending_actual=0 "
+        "overflow=0 peak_pending=0 suppressed=0"
+    )
+    clean_report_marker = clean_status_marker.replace(
+        "command=scb_status", "command=scb_report"
+    )
+    native_list_trace = "[tcl_cmd] smoke.tcl @ 1.000 ns: scb_list"
+    native_report_trace = (
+        f"[tcl_cmd] smoke.tcl @ 3.000 ns: scb_report "
+        f"name={SCOREBOARD_PATH} limit=0"
+    )
+    clean_log = "\n".join(
+        (
+            "UVM_INFO @ 0 [PH/TRC/STRT] : Phase 'uvm.uvm_sched.reset' "
+            "Starting phase",
+            "UVM_INFO @ 10 [PH/TRC/DONE] : Phase 'uvm.uvm_sched.reset' "
+            "Completed phase",
+            "SCB_ADAPTER_REGISTRATION "
+            "commands=scb_list,scb_status,scb_report,scb_set_limit",
+            native_list_trace,
+            f"SCB_ADAPTER_SMOKE command=scb_list status=0 result={SCOREBOARD_PATH}",
+            f"[tcl_cmd] smoke.tcl @ 2.000 ns: scb_status name={SCOREBOARD_PATH}",
+            clean_status_marker,
+            native_report_trace,
+            clean_report_marker,
+            f"[tcl_cmd] smoke.tcl @ 4.000 ns: scb_set_limit "
+            f"name={SCOREBOARD_PATH} limit=-1",
+            "SCB_ADAPTER_SMOKE command=scb_set_limit status=0 "
+            f"result={SCOREBOARD_PATH} report_limit=-1",
+            f"UVM_INFO @ 4 {SCOREBOARD_PATH} [SCB_REPORT] "
+            "Problem streams: total=0 shown=0 omitted=0",
+            "[tcl_cmd] smoke.tcl @ 5.000 ns: "
+            "end_test idle=1us timeout=10us",
+            "SCB_ADAPTER_SMOKE command=end_test status=0 result=OK",
+            "TC PASSED.(warning:1,error:0,fatal:0)",
+            "UVM_ERROR : 0",
+            "UVM_FATAL : 0",
+            "",
+        )
+    )
+    validator_tmp = tmp_path / "validator tmp"
+    validator_tmp.mkdir()
+
+    def validate(name: str, contents: str) -> subprocess.CompletedProcess[str]:
+        log = tmp_path / name
+        log.write_text(contents, encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(validator_tmp)
+        return subprocess.run(
+            [
+                str(GENERATED_SCB_MATRIX_RUNNER),
+                "--validate-log",
+                "tcl",
+                "synthetic",
+                str(log),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    clean = validate("clean.log", clean_log)
+    assert clean.returncode == 0, clean.stderr
+
+    missing_path = validate(
+        "missing-path.log",
+        clean_log.replace(SCOREBOARD_PATH, "uvm_test_top.m_env.m_scb.wrong"),
+    )
+    assert missing_path.returncode != 0
+
+    unknown_command = validate(
+        "unknown-command.log",
+        clean_log + 'invalid command name "scb_status"\n',
+    )
+    assert unknown_command.returncode != 0
+
+    mixed_failure = validate(
+        "mixed-failure.log",
+        clean_log.replace("UVM_ERROR : 0", "UVM_ERROR : 2")
+        + "[ERROR] injected AIP failure\n",
+    )
+    assert mixed_failure.returncode != 0
+
+    duplicate_pass = validate(
+        "duplicate-pass.log",
+        clean_log + "TC PASSED.(warning:0,error:0,fatal:0)\n",
+    )
+    assert duplicate_pass.returncode != 0
+
+    missing_report = validate(
+        "missing-report.log",
+        clean_log.replace(clean_report_marker, clean_status_marker),
+    )
+    assert missing_report.returncode != 0
+
+    failed_command = validate(
+        "failed-command.log",
+        clean_log
+        + "SCB_ADAPTER_SMOKE command=scb_status status=1 "
+        "result=command failed\n",
+    )
+    assert failed_command.returncode != 0
+
+    contradictory_list = validate(
+        "contradictory-list.log",
+        clean_log
+        + "SCB_ADAPTER_SMOKE command=scb_list status=0 "
+        "result=uvm_test_top.m_env.m_scb.wrong\n",
+    )
+    assert contradictory_list.returncode != 0
+
+    plain_aip_error = validate(
+        "plain-aip-error.log",
+        clean_log + "ERROR: injected AIP failure\n",
+    )
+    assert plain_aip_error.returncode != 0
+
+    no_ack_bridge_warning = validate(
+        "no-ack-bridge-warning.log",
+        clean_log
+        + "[AIP_TCL_BRIDGE] WARN: cmd 7 no ack after 50000ns. "
+        "result 可能陈旧.\n",
+    )
+    assert no_ack_bridge_warning.returncode != 0
+
+    wrong_path_native_trace = validate(
+        "wrong-path-native-trace.log",
+        clean_log
+        + "[tcl_cmd] smoke.tcl @ 4.500 ns: scb_status "
+        f"name={SCOREBOARD_PATH.rsplit('.', 1)[0]}.wrong\n",
+    )
+    assert wrong_path_native_trace.returncode != 0
+
+    duplicate_native_trace = validate(
+        "duplicate-native-trace.log",
+        clean_log + native_list_trace + "\n",
+    )
+    assert duplicate_native_trace.returncode != 0
+
+    unknown_native_trace = validate(
+        "unknown-native-trace.log",
+        clean_log
+        + "[tcl_cmd] smoke.tcl @ 4.500 ns: scb_debug "
+        f"name={SCOREBOARD_PATH}\n",
+    )
+    assert unknown_native_trace.returncode != 0
+
+    missing_native_report = validate(
+        "missing-native-report.log",
+        clean_log.replace(native_report_trace, ""),
+    )
+    assert missing_native_report.returncode != 0
+    assert not list(validator_tmp.glob("generated-scb-log.*"))
+
+
+def test_generated_scb_matrix_rejects_nested_aip_leak_in_off_project(tmp_path):
+    matrix_root = tmp_path / "matrix with spaces"
+    projects = {}
+    for label, platform, aip_core in (
+        ("advance_off", PlatformType.ADVANCE, False),
+        ("advance_on", PlatformType.ADVANCE, True),
+        ("port_off", PlatformType.PORT, False),
+        ("port_on", PlatformType.PORT, True),
+    ):
+        output = matrix_root / label
+        output.mkdir(parents=True)
+        projects[label] = generate(output, platform, aip_core)
+
+    nested_agent = (
+        projects["advance_off"]
+        / "env/agents/axi_agent/src/axi_drv.sv"
+    )
+    nested_agent.write_text(
+        nested_agent.read_text(encoding="utf-8")
+        + "\nimport aip_core_pkg::*; // injected nested AIP leak\n",
+        encoding="utf-8",
+    )
+
+    aip_core_dir = tmp_path / "aip core"
+    aip_core_dir.mkdir()
+    (aip_core_dir / "aip_core_pkg.sv").write_text("package aip_core_pkg; endpackage\n")
+    (aip_core_dir / "aip_cmd.tcl").write_text("# test stub\n")
+    tcl_script = tmp_path / "smoke script.tcl"
+    tcl_script.write_text("# test stub\n")
+
+    stub_bin = tmp_path / "stub bin"
+    stub_bin.mkdir()
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        echo "unexpected compile reached" >&2
+        exit 93
+        """,
+    )
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:{environment['PATH']}"
+
+    completed = subprocess.run(
+        [
+            str(GENERATED_SCB_MATRIX_RUNNER),
+            *(str(projects[label]) for label in (
+                "advance_off", "advance_on", "port_off", "port_on"
+            )),
+            str(aip_core_dir),
+            str(tcl_script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "advance_off: AIP-off generated text contains AIP integration" in (
+        completed.stderr
+    )
+    assert "unexpected compile reached" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "duplicate_entry"),
+    (
+        ("cfg/tb.f", "$AIP_CORE_HOME/aip_core_pkg.sv"),
+        ("cfg/env.f", "-F  ../common/common_lib_pkg.f"),
+        ("common/common_lib_pkg.f", "./common_scb_aip_adapter.sv"),
+    ),
+    ids=("aip-package", "common-include", "adapter"),
+)
+def test_generated_scb_matrix_rejects_duplicate_aip_order_entries(
+    tmp_path, relative_path, duplicate_entry
+):
+    matrix_root = tmp_path / "duplicate matrix with spaces"
+    projects = {}
+    for label, platform, aip_core in (
+        ("advance_off", PlatformType.ADVANCE, False),
+        ("advance_on", PlatformType.ADVANCE, True),
+        ("port_off", PlatformType.PORT, False),
+        ("port_on", PlatformType.PORT, True),
+    ):
+        output = matrix_root / label
+        output.mkdir(parents=True)
+        projects[label] = generate(output, platform, aip_core)
+
+    mutated_file = projects["advance_on"] / relative_path
+    mutated_file.write_text(
+        mutated_file.read_text(encoding="utf-8") + f"{duplicate_entry}\n",
+        encoding="utf-8",
+    )
+
+    aip_core_dir = tmp_path / "aip core"
+    aip_core_dir.mkdir()
+    (aip_core_dir / "aip_core_pkg.sv").write_text("package aip_core_pkg; endpackage\n")
+    (aip_core_dir / "aip_cmd.tcl").write_text("# test stub\n")
+    tcl_script = tmp_path / "smoke script.tcl"
+    tcl_script.write_text("# test stub\n")
+
+    stub_bin = tmp_path / "stub bin"
+    stub_bin.mkdir()
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        echo "unexpected compile reached" >&2
+        exit 93
+        """,
+    )
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:{environment['PATH']}"
+    completed = subprocess.run(
+        [
+            str(GENERATED_SCB_MATRIX_RUNNER),
+            *(str(projects[label]) for label in (
+                "advance_off", "advance_on", "port_off", "port_on"
+            )),
+            str(aip_core_dir),
+            str(tcl_script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "advance_on: AIP-on filelist entries must appear exactly once" in (
+        completed.stderr
+    )
+    assert "syntax error in expression" not in completed.stderr
+    assert "unexpected compile reached" not in completed.stderr
 
 
 def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
