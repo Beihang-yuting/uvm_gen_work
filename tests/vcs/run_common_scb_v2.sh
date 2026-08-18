@@ -109,6 +109,7 @@ run_mode() {
         +UVM_TESTNAME=common_scb_unit_test \
         "+SCB_EXPECT_REPORT_LIMIT=${expected_limit}" \
         "+SCB_EXPECT_CFG_WARN=${expect_cfg_warn}" \
+        +SCB_EXPECT_CONFIG_WARN=1 \
         "+SCB_EXPECT_CFG_TEXT=${expected_cfg_text}" \
         "$@" -l "${run_log}" >"${run_console}" 2>&1; then
         echo "common scoreboard v2 run failed: ${label}" >&2
@@ -124,6 +125,12 @@ run_mode() {
     fi
     if [[ $(grep -Fxc 'SCB_UNIT_PASS' "${run_log}" || true) -ne 1 ]]; then
         echo "common scoreboard v2 exact PASS marker missing/duplicated: ${label}" >&2
+        tail -n 120 "${run_log}" >&2 || true
+        exit 1
+    fi
+    if [[ $(grep -Fxc 'SCB_CLONE_DISABLED_OWNERSHIP_PASS' \
+            "${run_log}" || true) -ne 1 ]]; then
+        echo "common scoreboard v2 clone-disabled ownership marker missing/duplicated: ${label}" >&2
         tail -n 120 "${run_log}" >&2 || true
         exit 1
     fi

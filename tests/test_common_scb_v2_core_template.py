@@ -931,6 +931,12 @@ def assert_core_contract(core_raw: str) -> None:
             ("non-null config guard", r"if\s*\(\s*configured\s*!=\s*null\s*\)"),
             ("config override assignment", r"m_cfg\s*=\s*configured\s*;"),
             ("null config warning", r"null cfg override ignored; using default"),
+            ("configured report bound", r"m_cfg\.m_report_limit\s*<\s*-1"),
+            (
+                "configured report warning",
+                r"configured m_report_limit=%0d is below -1; using 10",
+            ),
+            ("configured report fallback", r"m_cfg\.m_report_limit\s*=\s*10"),
             (
                 "report plusarg presence",
                 r"\$test\$plusargs\s*\(\s*\"SCB_REPORT_LIMIT=\"\s*\)",
@@ -949,7 +955,6 @@ def assert_core_contract(core_raw: str) -> None:
                 "invalid plusarg warning",
                 r"invalid SCB_REPORT_LIMIT='%s'; ignoring override",
             ),
-            ("report normalization", r"m_cfg\.m_report_limit\s*<\s*-1"),
             ("error-limit normalization", r"m_cfg\.m_err_limit\s*<\s*0"),
             ("pending-limit normalization", r"m_cfg\.m_pending_limit\s*<\s*0"),
             ("comparison-mode validation", r"case\s*\(\s*m_cfg\.m_cmp_mode\s*\)"),
@@ -1001,6 +1006,11 @@ def assert_core_contract(core_raw: str) -> None:
         r"\"invalid SCB_REPORT_LIMIT='%s'; ignoring override\"\s*,\s*"
         r"value_text\s*\)\s*\)"
     )
+    configured_report_warning = (
+        r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*\$sformatf\s*\(\s*"
+        r"\"configured m_report_limit=%0d is below -1; using 10\"\s*,\s*"
+        r"m_cfg\.m_report_limit\s*\)\s*\)"
+    )
     error_limit_warning = (
         r"`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
         r"\"m_err_limit must be non-negative; using 10\"\s*\)"
@@ -1020,6 +1030,7 @@ def assert_core_contract(core_raw: str) -> None:
     )
     required_warnings = [
         ("null config override", null_config_warning),
+        ("configured report limit", configured_report_warning),
         ("invalid report plusarg", invalid_report_warning),
         ("error-limit normalization", error_limit_warning),
         ("pending-limit normalization", pending_limit_warning),
@@ -1040,10 +1051,12 @@ def assert_core_contract(core_raw: str) -> None:
         for call in sv_macro_calls(build, "uvm_warning")
         if re.search(r"report[_ ]limit", call, flags=re.IGNORECASE)
     ]
-    assert len(report_warning_calls) == 1 and re.fullmatch(
-        invalid_report_warning, report_warning_calls[0]
-    ), (
-        "the invalid plusarg path must be the only report-limit warning"
+    assert len(report_warning_calls) == 2
+    assert re.fullmatch(configured_report_warning, report_warning_calls[0]), (
+        "the configured report-limit warning must be exact and precede plusarg parsing"
+    )
+    assert re.fullmatch(invalid_report_warning, report_warning_calls[1]), (
+        "the invalid plusarg report-limit warning must remain exact"
     )
     report_default_assignment = (
         r"m_cfg\.m_report_limit\s*=\s*10\s*;"
@@ -1053,16 +1066,20 @@ def assert_core_contract(core_raw: str) -> None:
         "build_phase must normalize m_report_limit to 10 exactly once"
     )
     report_normalization = re.search(
-        r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*"
-        r"m_cfg\.m_report_limit\s*=\s*10\s*;",
+        r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*begin\s*"
+        + configured_report_warning
+        + r"\s*m_cfg\.m_report_limit\s*=\s*10\s*;\s*end",
         build,
     )
     assert report_normalization, (
-        "the sole report-limit default assignment must belong to the silent "
-        "post-plusarg normalization"
+        "the sole report-limit default assignment must warn while sanitizing "
+        "the configured value"
     )
     assert assignments[0].start() > report_normalization.start(), (
         "report-limit default assignment must occur after its normalization guard"
+    )
+    assert report_normalization.start() < invalid_plusarg_branch.start(), (
+        "configured report-limit sanitization must precede plusarg parsing"
     )
 
     mode_validation = re.search(
@@ -1617,25 +1634,16 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
             r"if \(m_detail_emitted < m_cfg.m_err_limit\) begin",
             "if (1) begin",
         ),
-        "extra report warning and early assignment": (
-            r"(?s)else\s*(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
-            r"\$sformatf\s*\(\s*\"invalid SCB_REPORT_LIMIT='%s'; ignoring override\"\s*,\s*"
-            r"value_text\s*\)\s*\))\s*end\s*"
-            r"if\s*\(\s*m_cfg\.m_report_limit\s*<\s*-1\s*\)\s*"
-            r"m_cfg\.m_report_limit\s*=\s*10\s*;",
-            r"else begin\n            \g<warning>\n"
-            r"            m_cfg.m_report_limit = 10;\n"
-            r"        end\n    end\n"
-            r"    if (m_cfg.m_report_limit < -1) begin\n"
-            r"        `uvm_warning(\"SCB_CFG\", "
-            r"\"m_report_limit must be -1 or greater; using 10\")\n"
-            r"        m_cfg.m_report_limit = 10;\n"
-            r"    end",
+        "duplicate configured report warning": (
+            r"(?P<warning>`uvm_warning\s*\(\s*\"SCB_CFG\"\s*,\s*"
+            r"\$sformatf\s*\(\s*"
+            r"\"configured m_report_limit=%0d is below -1; using 10\"\s*,\s*"
+            r"m_cfg\.m_report_limit\s*\)\s*\))",
+            r"\g<warning>\n        \g<warning>",
         ),
         "differently worded report warning": (
-            r"if \(m_cfg.m_report_limit < -1\)",
-            r"`uvm_warning(\"SCB_CFG\", \"configured report limit invalid\")\n"
-            r"    if (m_cfg.m_report_limit < -1)",
+            r"configured m_report_limit=%0d is below -1; using 10",
+            r"configured report limit invalid; using 10",
         ),
         "missing error-limit warning": (
             r"`uvm_warning\(\"SCB_CFG\", "

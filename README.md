@@ -175,6 +175,10 @@ appropriate stream and comparison kind.
 The scoreboard supports ordered exact, ordered with DUT loss, and unordered
 comparison. Its core `push_expected()` and `push_actual()` input APIs are
 functions, and transactions retained in its queues are cloned by default.
+With `m_clone_en=0`, the scoreboard does not copy the transaction or take ownership.
+It retains the original producer-owned transaction handle, so later producer
+mutation affects comparison.
+Callers must keep that handle stable while it is pending in the scoreboard.
 
 The final report always prints aggregate totals and, by default, up to the top 10
 problem streams. Normal streams are omitted. `+SCB_REPORT_LIMIT=0` prints the

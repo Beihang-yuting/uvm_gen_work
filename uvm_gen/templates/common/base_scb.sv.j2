@@ -162,6 +162,12 @@ function void common_uvm_scb::build_phase(uvm_phase phase);
         else
             `uvm_warning("SCB_CFG", "null cfg override ignored; using default")
     end
+    if (m_cfg.m_report_limit < -1) begin
+        `uvm_warning("SCB_CFG",
+                     $sformatf("configured m_report_limit=%0d is below -1; using 10",
+                               m_cfg.m_report_limit))
+        m_cfg.m_report_limit = 10;
+    end
     if ($test$plusargs("SCB_REPORT_LIMIT=")) begin
         value_text = "";
         if ($value$plusargs("SCB_REPORT_LIMIT=%s", value_text)
@@ -173,8 +179,6 @@ function void common_uvm_scb::build_phase(uvm_phase phase);
                          $sformatf("invalid SCB_REPORT_LIMIT='%s'; ignoring override",
                                    value_text))
     end
-    if (m_cfg.m_report_limit < -1)
-        m_cfg.m_report_limit = 10;
     if (m_cfg.m_err_limit < 0) begin
         `uvm_warning("SCB_CFG", "m_err_limit must be non-negative; using 10")
         m_cfg.m_err_limit = 10;

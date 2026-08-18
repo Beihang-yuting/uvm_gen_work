@@ -348,6 +348,7 @@ module common_scb_unit_tb;
         scb_probe m_check_once;
         scb_probe m_cfg_seven;
         scb_probe m_cfg_invalid;
+        scb_probe m_clone_disabled;
 
         result_sink m_exact_results;
         result_sink m_topn_results;
@@ -435,7 +436,8 @@ module common_scb_unit_tb;
         endfunction
 
         function void register_report_expectations(int expected_cfg_warn,
-                                                    string expected_cfg_text);
+                                                    string expected_cfg_text,
+                                                    int expected_config_warn);
             string actual_first;
             actual_first = "actual input arrived before expected";
 
@@ -514,6 +516,8 @@ module common_scb_unit_tb;
             expect_final("uvm_test_top.m_cfg_seven", UVM_ERROR, "SCB_FAIL");
             expect_final("uvm_test_top.m_cfg_invalid", UVM_ERROR,
                          "SCB_FAIL");
+            expect_final("uvm_test_top.m_clone_disabled", UVM_INFO,
+                         "SCB_PASS");
 
             expect_cfg_warning("uvm_test_top.m_exact_pass", expected_cfg_warn,
                                expected_cfg_text);
@@ -547,12 +551,19 @@ module common_scb_unit_tb;
                                expected_cfg_text);
             expect_cfg_warning("uvm_test_top.m_cfg_invalid", expected_cfg_warn,
                                expected_cfg_text);
+            expect_cfg_warning("uvm_test_top.m_clone_disabled",
+                               expected_cfg_warn, expected_cfg_text);
+            if (expected_config_warn != 0)
+                m_catcher.expect_report(
+                    "uvm_test_top.m_cfg_invalid", "SCB_CFG", UVM_WARNING, 1,
+                    "configured m_report_limit=-2 is below -1; using 10");
         endfunction
 
         function void build_phase(uvm_phase phase);
             common_uvm_scb_cfg cfg_seven;
             common_uvm_scb_cfg cfg_invalid;
             int expected_cfg_warn;
+            int expected_config_warn;
             string expected_cfg_text;
             super.build_phase(phase);
             m_failures = 0;
@@ -561,6 +572,11 @@ module common_scb_unit_tb;
 
             if (!$value$plusargs("SCB_EXPECT_CFG_WARN=%d", expected_cfg_warn))
                 expected_cfg_warn = 0;
+            unit_check($value$plusargs(
+                      "SCB_EXPECT_CONFIG_WARN=%d", expected_config_warn),
+                  "runner did not provide SCB_EXPECT_CONFIG_WARN");
+            unit_check(expected_config_warn == 1,
+                  "configured-invalid warning expectation must be one");
             expected_cfg_text = "";
             if (expected_cfg_warn != 0) begin
                 unit_check($value$plusargs(
@@ -603,6 +619,8 @@ module common_scb_unit_tb;
             m_check_once = scb_probe::type_id::create("m_check_once", this);
             m_cfg_seven = scb_probe::type_id::create("m_cfg_seven", this);
             m_cfg_invalid = scb_probe::type_id::create("m_cfg_invalid", this);
+            m_clone_disabled = scb_probe::type_id::create(
+                "m_clone_disabled", this);
 
             m_exact_results = result_sink::type_id::create(
                 "m_exact_results", this);
@@ -637,6 +655,8 @@ module common_scb_unit_tb;
             m_report_disabled.m_cfg.m_report_en = 0;
             m_check_once.m_cfg.m_cmp_mode = SCB_UNORDERED;
             m_check_once.m_cfg.m_err_limit = 0;
+            m_clone_disabled.m_cfg.m_cmp_mode = SCB_ORDERED_EXACT;
+            m_clone_disabled.m_cfg.m_clone_en = 0;
 
             m_exact_pass.m_cfg.m_report_en = 0;
             m_exact_fail.m_cfg.m_report_en = 0;
@@ -650,9 +670,11 @@ module common_scb_unit_tb;
             m_suppression.m_cfg.m_report_en = 0;
             m_suppression_zero.m_cfg.m_report_en = 0;
             m_check_once.m_cfg.m_report_en = 0;
+            m_clone_disabled.m_cfg.m_report_en = 0;
 
             register_report_expectations(expected_cfg_warn,
-                                         expected_cfg_text);
+                                         expected_cfg_text,
+                                         expected_config_warn);
         endfunction
 
         function void connect_phase(uvm_phase phase);
@@ -1075,6 +1097,17 @@ module common_scb_unit_tb;
                   && (m_exact_results.results[0].actual.value == 7),
                   "retained clone changed with producer-owned handle");
 
+            mutable = item(41);
+            m_clone_disabled.push_actual(mutable, 64'hc10e, 41);
+            mutable.value = 42;
+            m_clone_disabled.push_expected(item(42), 64'hc10e, 41);
+            if ((m_clone_disabled.match_count() == 1)
+                    && m_clone_disabled.is_clean())
+                $display("SCB_CLONE_DISABLED_OWNERSHIP_PASS");
+            else
+                unit_check(0,
+                      "clone-disabled comparison did not observe producer mutation");
+
             m_exact_fail.push_expected(item(1), 64'h11);
             m_exact_fail.push_actual(item(2), 64'h11);
 
@@ -1131,6 +1164,7 @@ module common_scb_unit_tb;
             string tokens[$];
             int expected_limit;
             int expected_cfg_warn;
+            int expected_config_warn;
             int expected_shown;
             int expected_omitted;
             int report_count;
@@ -1140,15 +1174,15 @@ module common_scb_unit_tb;
                   "runner did not provide SCB_EXPECT_REPORT_LIMIT");
             unit_check($value$plusargs("SCB_EXPECT_CFG_WARN=%d", expected_cfg_warn),
                   "runner did not provide SCB_EXPECT_CFG_WARN");
+            unit_check($value$plusargs(
+                      "SCB_EXPECT_CONFIG_WARN=%d", expected_config_warn),
+                  "runner did not provide SCB_EXPECT_CONFIG_WARN");
             unit_check(m_many.m_cfg.m_report_limit == expected_limit,
                   $sformatf("report limit=%0d expected=%0d",
                             m_many.m_cfg.m_report_limit, expected_limit));
-            if (expected_cfg_warn != 0)
-                unit_check(m_catcher.count_id("SCB_CFG") == 16,
-                      "invalid report limit SCB_CFG warning count is not 16");
-            else
-                unit_check(m_catcher.count_id("SCB_CFG") == 0,
-                      "valid report limit emitted unexpected SCB_CFG warning");
+            unit_check(m_catcher.count_id("SCB_CFG")
+                      == expected_config_warn + (17 * expected_cfg_warn),
+                  "SCB_CFG warning count does not include configured and plusarg warnings");
 
             expected_shown = (expected_limit == -1) ? 15 : expected_limit;
             if (expected_shown > 15) expected_shown = 15;
@@ -1243,6 +1277,10 @@ module common_scb_unit_tb;
                   && (m_exact_pass.mismatch_count() == 0)
                   && m_exact_pass.is_clean(),
                   "ordered exact pass counters/clean status mismatch");
+            unit_check((m_clone_disabled.get_status() == SCB_PASS)
+                  && (m_clone_disabled.match_count() == 1)
+                  && m_clone_disabled.is_clean(),
+                  "clone-disabled ownership comparison did not pass");
             unit_check(m_exact_fail.get_status() == SCB_FAIL,
                   "ordered exact mismatch did not fail");
             unit_check(m_exact_fail.mismatch_count() == 1,

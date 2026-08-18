@@ -903,8 +903,10 @@ def test_v2_vcs_semantic_assets_cover_runtime_contract():
 
     harness = harness_path.read_text(encoding="utf-8")
     runner = runner_path.read_text(encoding="utf-8")
+    readme = (repository / "README.md").read_text(encoding="utf-8")
     for contract in (
         "SCB_UNIT_PASS",
+        "SCB_CLONE_DISABLED_OWNERSHIP_PASS",
         "uvm_report_catcher",
         "common_scb_reporter",
         "class scb_report_expectation",
@@ -913,8 +915,12 @@ def test_v2_vcs_semantic_assets_cover_runtime_contract():
         "all_expectations_consumed",
         "m_cfg_seven",
         "m_cfg_invalid",
+        "m_clone_disabled",
+        "m_clone_en = 0",
         "uvm_config_db#(common_uvm_scb_cfg)::set",
         "SCB_EXPECT_CFG_TEXT",
+        "SCB_EXPECT_CONFIG_WARN",
+        "configured m_report_limit=-2 is below -1; using 10",
         "m_reset_counters",
         "probe_finalize_pending()",
         "reset_state(0)",
@@ -950,6 +956,16 @@ def test_v2_vcs_semantic_assets_cover_runtime_contract():
         "UVM_FATAL",
     ):
         assert gate in runner
+    assert "SCB_CLONE_DISABLED_OWNERSHIP_PASS" in runner
+    assert "+SCB_EXPECT_CONFIG_WARN=1" in runner
+    assert re.search(
+        r'expect_cfg_warning\("uvm_test_top\.m_clone_disabled"\s*,',
+        harness,
+    )
+    assert "17 * expected_cfg_warn" in harness
+    assert "does not copy the transaction or take ownership" in readme
+    assert "retains the original producer-owned transaction handle" in readme
+    assert "Callers must keep that handle stable" in readme
 
 
 def test_v2_vcs_runner_rejects_ambiguous_uvm_logs(tmp_path):

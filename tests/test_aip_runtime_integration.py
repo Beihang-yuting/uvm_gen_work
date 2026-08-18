@@ -12,6 +12,7 @@ from uvm_gen.generators.platform import PlatformGenerator
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 GENERATED_SCB_MATRIX_RUNNER = REPOSITORY / "tests/vcs/run_generated_scb_matrix.sh"
+AIP_RUNTIME_RUNNER = REPOSITORY / "tests/vcs/run_aip_runtime_smoke.sh"
 SCB_ADAPTER_SMOKE_TCL = REPOSITORY / "tests/vcs/scb_adapter_smoke.tcl"
 SCOREBOARD_PATH = "uvm_test_top.m_env.m_scb.m_axi_scb"
 
@@ -539,6 +540,300 @@ def test_generated_scb_matrix_rejects_duplicate_aip_order_entries(
     assert "unexpected compile reached" not in completed.stderr
 
 
+def test_aip_runtime_validator_rejects_adversarial_logs(tmp_path):
+    clean_log = (
+        "UVM_INFO @ 1.000ns: reset complete\r\n"
+        "\x1b[32mTC PASSED.(warning:2,error:0,fatal:0)\x1b[0m\r\n"
+        "UVM_ERROR : 0\r\n"
+        "UVM_FATAL : 0\r\n"
+    )
+    validator_tmp = tmp_path / "validator tmp"
+    validator_tmp.mkdir()
+
+    def validate(name: str, contents: str, stage: str = "base"):
+        log = tmp_path / name
+        log.write_text(contents, encoding="utf-8")
+        original = log.read_bytes()
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(validator_tmp)
+        completed = subprocess.run(
+            [
+                str(AIP_RUNTIME_RUNNER),
+                "--validate-log",
+                stage,
+                "synthetic",
+                str(log),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert log.read_bytes() == original
+        return completed
+
+    clean = validate("clean.log", clean_log)
+    assert clean.returncode == 0, clean.stderr
+
+    mutations = {
+        "duplicate-pass": clean_log
+        + "TC PASSED.(warning:0,error:0,fatal:0)\n",
+        "unclean-duplicate-pass": clean_log
+        + "TC PASSED.(warning:0,error:1,fatal:0)\n",
+        "failed-after-pass": clean_log + "TC FAILED.\n",
+        "failed-after-pass-no-period": clean_log + "TC FAILED\n",
+        "nonzero-summary": clean_log.replace("UVM_ERROR : 0", "UVM_ERROR : 2"),
+        "duplicate-zero-summary": clean_log + "UVM_FATAL : 0\n",
+        "uvm-error-diagnostic": clean_log
+        + "UVM_ERROR file.sv(7) @ 1ns: top [INJECTED] error\n",
+        "uvm-fatal-diagnostic": clean_log
+        + "UVM_FATAL @ 1ns: top [INJECTED] fatal\n",
+        "plain-error": clean_log + "ERROR: bridge command failed\n",
+        "plain-fatal": clean_log + "FATAL: simulator stopped late\n",
+        "vcs-runtime-error": clean_log + "Error-[RTERR] runtime failure\n",
+        "bracket-error": clean_log + "[ERROR] bridge command failed\n",
+        "bracket-fatal": clean_log + "[FATAL] bridge command failed\n",
+        "aip-error": clean_log + "AIP command error while dispatching\n",
+        "aip-failure": clean_log + "AIP command failure after completion\n",
+        "no-ack": clean_log
+        + "[AIP_TCL_BRIDGE] WARN: cmd 7 no ack after 50000ns\n",
+        "stale-ack": clean_log
+        + "[AIP_TCL_BRIDGE] WARN: stale acknowledgement reused\n",
+        "missing-error-summary": clean_log.replace("UVM_ERROR : 0\r\n", ""),
+        "missing-fatal-summary": clean_log.replace("UVM_FATAL : 0\r\n", ""),
+        "zero-timestamp": clean_log.replace("@ 1.000ns", "@ 0ns"),
+        "jinja-residue": clean_log + "generated={{ unresolved_name }}\n",
+    }
+    for name, contents in mutations.items():
+        rejected = validate(f"{name}.log", contents)
+        assert rejected.returncode != 0, f"accepted {name} mutation"
+
+    invalid_stage = validate("invalid-stage.log", clean_log, stage="late")
+    assert invalid_stage.returncode == 2
+    assert "stage must be base or tcl" in invalid_stage.stderr
+    wrong_arity = subprocess.run(
+        [
+            str(AIP_RUNTIME_RUNNER),
+            "--validate-log",
+            "base",
+            "synthetic",
+            str(tmp_path / "clean.log"),
+            "extra",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert wrong_arity.returncode == 2
+    assert "Usage:" in wrong_arity.stderr
+    assert not list(validator_tmp.glob("aip-runtime-log.*"))
+
+
+def test_aip_compile_validator_rejects_synthetic_diagnostics(tmp_path):
+    clean_compile = "Chronologic VCS simulator compiler output\n"
+    clean_console = "Compiler version and elapsed time\n"
+
+    def validate(name: str, compile_contents: str, console_contents: str):
+        compile_log = tmp_path / f"{name}.compile.log"
+        console_log = tmp_path / f"{name}.console.log"
+        compile_log.write_text(compile_contents, encoding="utf-8")
+        console_log.write_text(console_contents, encoding="utf-8")
+        originals = (compile_log.read_bytes(), console_log.read_bytes())
+        completed = subprocess.run(
+            [
+                str(AIP_RUNTIME_RUNNER),
+                "--validate-compile",
+                "synthetic",
+                str(compile_log),
+                str(console_log),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert (compile_log.read_bytes(), console_log.read_bytes()) == originals
+        return completed
+
+    clean = validate("clean", clean_compile, clean_console)
+    assert clean.returncode == 0, clean.stderr
+
+    mutations = {
+        "empty-compile": ("", clean_console),
+        "empty-console": (clean_compile, ""),
+        "jinja-compile": (clean_compile + "{{ unresolved }}\n", clean_console),
+        "jinja-console": (clean_compile, clean_console + "{% broken %}\n"),
+        "aip-error": (clean_compile + "[ERROR] AIP package rejected\n", clean_console),
+        "aip-fatal": (clean_compile, clean_console + "[FATAL] AIP compile stopped\n"),
+        "vcs-syntax": (
+            clean_compile + "Error-[SE] Syntax error in source file\n",
+            clean_console,
+        ),
+        "vcs-type": (
+            clean_compile,
+            clean_console + "Error-[SV-IRT] Illegal reference to type\n",
+        ),
+        "vcs-unresolved": (
+            clean_compile
+            + "Error-[XMRE] Cross-module reference resolution error\n",
+            clean_console,
+        ),
+        "plain-syntax": (clean_compile + "syntax error near token\n", clean_console),
+        "undefined-type": (clean_compile, clean_console + "undefined type foo_t\n"),
+        "unresolved-reference": (
+            clean_compile + "unresolved reference to foo_pkg\n",
+            clean_console,
+        ),
+    }
+    for name, (compile_contents, console_contents) in mutations.items():
+        rejected = validate(name, compile_contents, console_contents)
+        assert rejected.returncode != 0, f"accepted {name} compile diagnostic"
+
+
+def test_vcs_runtime_gate_rejects_zero_exit_compile_diagnostic(tmp_path):
+    labels = ("advance_off", "advance_on", "port_off", "port_on")
+    projects = {label: tmp_path / label for label in labels}
+    for project_dir in projects.values():
+        (project_dir / "cfg").mkdir(parents=True)
+
+    aip_core_dir = tmp_path / "aip_core"
+    aip_core_dir.mkdir()
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        while (($#)); do
+            case $1 in
+                --kill-after=*|-*) shift ;;
+                --) shift; break ;;
+                *) shift; break ;;
+            esac
+        done
+        exec "$@"
+        """,
+    )
+    write_executable(
+        stub_bin / "vcs",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        simv=simv
+        compile_log=
+        while (($#)); do
+            case $1 in
+                -o) simv=$2; shift 2 ;;
+                -l) compile_log=$2; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [[ -n ${compile_log} ]]
+        printf 'Error-[SE] Syntax error injected despite exit zero\\n' > "${compile_log}"
+        printf 'compiler console output\\n'
+        cat > "${simv}" <<'SIMV'
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        log_file=
+        while (($#)); do
+            case $1 in
+                -l) log_file=$2; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [[ -n ${log_file} ]]
+        printf '@ 1ns\\nTC PASSED.(warning:0,error:0,fatal:0)\\nUVM_ERROR : 0\\nUVM_FATAL : 0\\n' > "${log_file}"
+        SIMV
+        chmod +x "${simv}"
+        """,
+    )
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:{environment['PATH']}"
+    completed = subprocess.run(
+        [
+            "bash",
+            str(AIP_RUNTIME_RUNNER),
+            *(str(projects[label]) for label in labels),
+            str(aip_core_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "VCS syntax/type/unresolved diagnostic present" in completed.stderr
+
+
+def test_vcs_runtime_gate_requires_fresh_executable(tmp_path):
+    labels = ("advance_off", "advance_on", "port_off", "port_on")
+    projects = {label: tmp_path / label for label in labels}
+    for project_dir in projects.values():
+        (project_dir / "cfg").mkdir(parents=True)
+
+    aip_core_dir = tmp_path / "aip_core"
+    aip_core_dir.mkdir()
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        while (($#)); do
+            case $1 in
+                --kill-after=*|-*) shift ;;
+                --) shift; break ;;
+                *) shift; break ;;
+            esac
+        done
+        exec "$@"
+        """,
+    )
+    write_executable(
+        stub_bin / "vcs",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        compile_log=
+        while (($#)); do
+            case $1 in
+                -l) compile_log=$2; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [[ -n ${compile_log} ]]
+        printf 'VCS compile completed cleanly\\n' > "${compile_log}"
+        printf 'VCS compiler console completed cleanly\\n'
+        """,
+    )
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:{environment['PATH']}"
+    completed = subprocess.run(
+        [
+            "bash",
+            str(AIP_RUNTIME_RUNNER),
+            *(str(projects[label]) for label in labels),
+            str(aip_core_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "fresh executable missing or not executable" in completed.stderr
+
+
 def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
     runtime_gate = (
         Path(__file__).parent.parent / "tests/vcs/run_aip_runtime_smoke.sh"
@@ -582,13 +877,17 @@ def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
         printf '%s\\n' "$@" > "${VCS_CALLS_DIR}/${label}.argv"
 
         simv=simv
+        compile_log=
         while (($#)); do
-            if [[ $1 == -o ]]; then
-                simv=$2
-                break
-            fi
-            shift
+            case $1 in
+                -o) simv=$2; shift 2 ;;
+                -l) compile_log=$2; shift 2 ;;
+                *) shift ;;
+            esac
         done
+        [[ -n ${compile_log} ]]
+        printf 'VCS compile completed cleanly\\n' > "${compile_log}"
+        printf 'VCS compiler console completed cleanly\\n'
 
         cat > "${simv}" <<'SIMV'
         #!/usr/bin/env bash
@@ -605,7 +904,7 @@ def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
             esac
         done
         [[ -n ${log_file} ]]
-        printf '@ 1ns\\nTC PASSED.(warning:0,error:0,fatal:0)\\n' > "${log_file}"
+        printf '@ 1ns\\nTC PASSED.(warning:0,error:0,fatal:0)\\nUVM_ERROR : 0\\nUVM_FATAL : 0\\n' > "${log_file}"
         SIMV
         chmod +x "${simv}"
         """,
