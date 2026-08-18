@@ -164,6 +164,48 @@ Same set of generated files; only template internals differ. Selected via
 
 ---
 
+## Common Scoreboard v2
+
+Each generated checker owns one explicitly typed
+`common_uvm_scb#(<agent>_trans)` instance per agent. Generated transactions
+provide virtual `get_scb_stream_id()` and `get_scb_kind()` methods, which
+default to `'1` and `-1`; override them to route protocol traffic into the
+appropriate stream and comparison kind.
+
+The scoreboard supports ordered exact, ordered with DUT loss, and unordered
+comparison. Its core `push_expected()` and `push_actual()` input APIs are
+functions, and transactions retained in its queues are cloned by default.
+
+The final report always prints aggregate totals and, by default, up to the top 10
+problem streams. Normal streams are omitted. `+SCB_REPORT_LIMIT=0` prints the
+summary only, `+SCB_REPORT_LIMIT=-1` prints every problem stream, and a finite
+non-negative value prints up to that many top rows. The report always states the
+number of omitted problem streams. Invalid values produce a warning and leave
+the configured or default limit in effect. Reporting is console summary/table
+output; it does not create a full CSV or text dump. Runtime mismatch detail has
+its own `m_err_limit`, followed by a suppression summary when messages exceed
+that limit.
+
+`reset_state(0)` clears live stream queues and state while retaining cumulative
+diagnostics and counters; `reset_state(1)` also clears counter and diagnostic
+history. Generated reset hooks invoke the scoreboard reset as part of the
+platform reset lifecycle. The previous implementation remains available as
+`common_uvm_scb_legacy`.
+
+With `--aip-core`, exactly four scoreboard commands provide non-destructive
+inspection and report-limit control:
+
+```tcl
+scb_list
+scb_status name=uvm_test_top.m_env.m_scb.m_axi_scb
+scb_report name=uvm_test_top.m_env.m_scb.m_axi_scb limit=0
+scb_set_limit name=uvm_test_top.m_env.m_scb.m_axi_scb limit=-1
+```
+
+There is no scoreboard reset or clear command in the AIP adapter.
+
+---
+
 ## aip_core Integration
 
 Use `--aip-core` (CLI) or `aip_core: true` (YAML) to add:
