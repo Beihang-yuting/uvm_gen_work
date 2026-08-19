@@ -78,7 +78,7 @@ has_infrastructure_diagnostic() {
     local normalized_log=$1
 
     grep -Eiq \
-        '\{\{|\{%|%\}|syntax error|undefined (macro|type)|invalid command name|no such file or directory|file not found|(cannot|unable|failed to) (open|read) (file|include)|cannot find (file|include)|internal (compiler )?(error|failure)|compiler internal error|FLEXlm.*(error|failure)|license.*(error|fail|denied|unavailable|expired)|(error|fail|denied|unavailable|expired).*license' \
+        '\{\{|\{%|%\}|syntax error|undefined (macro|type)|invalid command name|no such file or directory|file not found|(cannot|unable|failed to) (open|read) (file|include)|cannot find (file|include)|internal (compiler )?(error|failure)|compiler internal error|FLEXlm.*(error|failure)|license.*(error|fail|denied|unavailable|expired)|(error|fail|denied|unavailable|expired).*license|^[[:space:]]*(segmentation fault|bus error|aborted|illegal instruction|floating point exception)([[:space:]]*(\(core dumped\)|core dumped))?[[:space:]]*$|^[[:space:]]*core dumped[[:space:]]*$|^.*:[[:space:]]+line[[:space:]]+[0-9]+:([[:space:]]+[0-9]+)?[[:space:]]*(segmentation fault|bus error|aborted|illegal instruction|floating point exception|killed|terminated)([[:space:]]*(\(core dumped\)|core dumped))?([[:space:]].*)?$|^[[:space:]]*(killed|terminated) by signal([[:space:]]+[[:alnum:]_+-]+)?[[:space:]]*$|^[[:space:]]*(vcs|vcs1|simv|compiler)(:|[[:space:]-]).*(crash(ed)?|fatal (error|signal)|caught signal|received signal|terminated by signal)' \
         "${normalized_log}"
 }
 
@@ -120,7 +120,7 @@ validate_width_mismatch_logs() {
                 || has_infrastructure_diagnostic "${normalized}"; then
             fail "unexpected width mismatch diagnostic: ${log}"
             grep -E \
-                'Error-\[[^]]+\]|syntax error|undefined (macro|type)|invalid command name|no such file|file not found|internal|license' \
+                'Error-\[[^]]+\]|syntax error|undefined (macro|type)|invalid command name|no such file|file not found|internal|license|segmentation fault|core dumped|bus error|aborted|illegal instruction|floating point exception|(killed|terminated) by signal' \
                 "${normalized}" >&2 || true
             return 1
         fi
@@ -166,7 +166,7 @@ validate_missing_vif_logs() {
                 || has_infrastructure_diagnostic "${normalized}"; then
             fail "unexpected missing VIF diagnostic: ${log}"
             grep -E \
-                '^UVM_(FATAL|ERROR)|Error-\[[^]]+\]|syntax error|undefined (macro|type)|invalid command name|no such file|file not found|internal|license' \
+                '^UVM_(FATAL|ERROR)|Error-\[[^]]+\]|syntax error|undefined (macro|type)|invalid command name|no such file|file not found|internal|license|segmentation fault|core dumped|bus error|aborted|illegal instruction|floating point exception|(killed|terminated) by signal' \
                 "${normalized}" >&2 || true
             return 1
         fi
@@ -293,10 +293,12 @@ timeout --kill-after=30s 600s vcs \
     >compile_bad_width_console.log 2>&1
 bad_width_status=$?
 set -e
-if [[ ${bad_width_status} -eq 124 || ${bad_width_status} -eq 137 ]]; then
-    fail "width mismatch compile timed out (exit ${bad_width_status})"
-    exit 1
-fi
+case ${bad_width_status} in
+    124|125|126|127|137)
+        fail "width mismatch compile timeout infrastructure failure (exit ${bad_width_status})"
+        exit 1
+        ;;
+esac
 if [[ ${bad_width_status} -eq 0 ]]; then
     fail 'width mismatch unexpectedly elaborated'
     exit 1
@@ -313,10 +315,12 @@ timeout --kill-after=10s 90s \
     >run_missing_vif_console.log 2>&1
 missing_vif_status=$?
 set -e
-if [[ ${missing_vif_status} -eq 124 || ${missing_vif_status} -eq 137 ]]; then
-    fail "missing VIF leg timed out (exit ${missing_vif_status})"
-    exit 1
-fi
+case ${missing_vif_status} in
+    124|125|126|127|137)
+        fail "missing VIF leg timeout infrastructure failure (exit ${missing_vif_status})"
+        exit 1
+        ;;
+esac
 if ! validate_missing_vif_logs \
         run_missing_vif.log run_missing_vif_console.log; then
     exit 1

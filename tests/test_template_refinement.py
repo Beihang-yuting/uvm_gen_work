@@ -1158,16 +1158,16 @@ def test_template_refinement_vcs_assets_cover_semantics():
     ]
     assert "timeout --kill-after=10s 90s" in missing_vif_leg
     assert "missing_vif_status" in missing_vif_leg
-    assert "124" in missing_vif_leg
-    assert "137" in missing_vif_leg
+    for timeout_status in ("124", "125", "126", "127", "137"):
+        assert timeout_status in missing_vif_leg
 
     width_status_check = script[
         script.index("bad_width_status=$?") :
         script.index("fsdb_native=false")
     ]
     assert "bad_width_status" in width_status_check
-    assert "124" in width_status_check
-    assert "137" in width_status_check
+    for timeout_status in ("124", "125", "126", "127", "137"):
+        assert timeout_status in width_status_check
     assert "CFCILFBI" in script
 
     cleanup = script[script.index("cleanup() {") : script.index("trap cleanup EXIT")]
@@ -1185,6 +1185,7 @@ def run_synthetic_template_refinement_gate(
     tmp_path: Path,
     *,
     width_status: int = 255,
+    missing_status: int = 0,
     width_primary_extra: str = "",
     width_console_extra: str = "",
     missing_primary_extra: str = "",
@@ -1317,6 +1318,7 @@ chmod +x "${output}"
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "TMPDIR": str(failure_tmp),
             "WIDTH_STATUS": str(width_status),
+            "MISSING_STATUS": str(missing_status),
             "WIDTH_PRIMARY_EXTRA": width_primary_extra,
             "WIDTH_CONSOLE_EXTRA": width_console_extra,
             "MISSING_PRIMARY_EXTRA": missing_primary_extra,
@@ -1336,7 +1338,7 @@ chmod +x "${output}"
     return completed, failure_tmp
 
 
-@pytest.mark.parametrize("status", [124, 137])
+@pytest.mark.parametrize("status", [124, 125, 126, 127, 137])
 def test_template_refinement_width_gate_rejects_timeout_status(
     tmp_path, status
 ):
@@ -1345,7 +1347,27 @@ def test_template_refinement_width_gate_rejects_timeout_status(
     )
 
     assert completed.returncode != 0
-    assert f"width mismatch compile timed out (exit {status})" in completed.stderr
+    assert (
+        f"width mismatch compile timeout infrastructure failure (exit {status})"
+        in completed.stderr
+    )
+    assert "TEMPLATE_REFINEMENT_VCS_GATE_PASS" not in completed.stdout
+
+
+@pytest.mark.parametrize("status", [124, 125, 126, 127, 137])
+def test_template_refinement_missing_vif_rejects_timeout_status(
+    tmp_path, status
+):
+    completed, _ = run_synthetic_template_refinement_gate(
+        tmp_path, missing_status=status
+    )
+
+    assert completed.returncode != 0
+    assert (
+        f"missing VIF leg timeout infrastructure failure (exit {status})"
+        in completed.stderr
+    )
+    assert "TEMPLATE_REFINEMENT_VCS_GATE_PASS" not in completed.stdout
 
 
 def test_template_refinement_width_gate_rejects_unrelated_vcs_error(tmp_path):
@@ -1388,6 +1410,32 @@ def test_template_refinement_missing_vif_rejects_unrelated_diagnostic(
 
     assert completed.returncode != 0
     assert "unexpected missing VIF diagnostic" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("leg", "diagnostic"),
+    [
+        ("width", "Segmentation fault (core dumped)"),
+        ("width", "bus ERROR"),
+        ("missing-vif", "Segmentation fault (core dumped)"),
+        ("missing-vif", "bus ERROR"),
+    ],
+)
+def test_template_refinement_negative_gate_rejects_process_crash(
+    tmp_path, leg, diagnostic
+):
+    extras = (
+        {"width_console_extra": diagnostic}
+        if leg == "width"
+        else {"missing_console_extra": diagnostic}
+    )
+    completed, _ = run_synthetic_template_refinement_gate(
+        tmp_path, **extras
+    )
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode != 0
+    assert "TEMPLATE_REFINEMENT_VCS_GATE_PASS" not in output
 
 
 def test_template_refinement_failure_logs_preserve_relative_paths(tmp_path):
