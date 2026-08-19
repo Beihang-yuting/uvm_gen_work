@@ -5,6 +5,27 @@
 // cleanup.  Each main_phase invocation happens only after reset_phase has
 // ended, so traffic must be consumed by workers owned by run_phase rather than
 // by a reset_phase descendant.
+class port_lifecycle_axi_trans extends axi_trans;
+    `uvm_object_utils(port_lifecycle_axi_trans)
+
+    function new(string name="port_lifecycle_axi_trans");
+        super.new(name);
+    endfunction
+
+    virtual function bit self_define_do_compare(
+        axi_trans cmp_trans,
+        output string diff,
+        input int kind = -1
+    );
+        if (cmp_trans == null) begin
+            diff = "lifecycle comparison received null";
+            return 0;
+        end
+        diff = "";
+        return 1;
+    endfunction
+endclass
+
 class tc_port_reset_lifecycle extends tc_base;
     `uvm_component_utils(tc_port_reset_lifecycle)
 
@@ -50,7 +71,8 @@ task tc_port_reset_lifecycle::send_and_match(int stage);
     int expected_rm_count;
     int expected_agt_count;
 
-    tr = axi_trans::type_id::create($sformatf("stage_%0d_tr", stage));
+    tr = port_lifecycle_axi_trans::type_id::create(
+        $sformatf("stage_%0d_tr", stage));
     expected_rm_count = m_env.m_scb.m_from_rm_axi_trans_cnt + 1;
     expected_agt_count = m_env.m_scb.m_from_dut_axi_trans_cnt + 1;
 

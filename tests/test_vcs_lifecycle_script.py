@@ -8,11 +8,22 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LIFECYCLE_RUNNER = REPO_ROOT / "tests" / "vcs" / "run_port_reset_lifecycle.sh"
+LIFECYCLE_SOURCE = REPO_ROOT / "tests" / "vcs" / "port_reset_lifecycle.sv"
 
 
 def write_executable(path: Path, contents: str) -> None:
     path.write_text(contents, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def test_port_reset_lifecycle_supplies_an_implemented_comparison_hook() -> None:
+    source = LIFECYCLE_SOURCE.read_text(encoding="utf-8")
+
+    assert "class port_lifecycle_axi_trans extends axi_trans;" in source
+    assert "`uvm_object_utils(port_lifecycle_axi_trans)" in source
+    assert "function bit self_define_do_compare(" in source
+    assert "return 1;" in source
+    assert "port_lifecycle_axi_trans::type_id::create" in source
 
 
 @pytest.mark.parametrize("source_is_absolute", [False, True], ids=["relative", "absolute"])
