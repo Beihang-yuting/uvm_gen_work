@@ -1466,7 +1466,8 @@ def test_generated_transactions_expose_default_scb_routing_hooks(tmp_path, platf
         trans = read(project, f"env/agents/{agent}_agent/src/{agent}_trans.sv")
         uncommented = strip_sv_comments(trans)
         comparison = re.search(
-            rf"(?ms)^[ \t]*function\s+bit\s+self_define_do_compare\s*\(\s*"
+            rf"(?ms)^[ \t]*(?:virtual\s+)?function\s+bit\s+"
+            rf"self_define_do_compare\s*\(\s*"
             rf"{agent}_trans\s+cmp_trans\s*,.*?^[ \t]*endfunction\b",
             uncommented,
         )

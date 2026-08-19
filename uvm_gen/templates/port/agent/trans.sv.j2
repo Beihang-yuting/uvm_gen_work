@@ -5,8 +5,7 @@
 
 class {{ name }}_trans extends uvm_sequence_item;
 
-    `uvm_object_utils_begin({{ name }}_trans)
-    `uvm_object_utils_end
+    `uvm_object_utils({{ name }}_trans)
 
     extern constraint trans_cons;
 
@@ -14,8 +13,51 @@ class {{ name }}_trans extends uvm_sequence_item;
         super.new(name);
     endfunction
 
-    function bit self_define_do_compare({{ name }}_trans cmp_trans, output string diff, input int kind = -1);
+    virtual function void do_copy(uvm_object rhs);
+        {{ name }}_trans typed_rhs;
+        super.do_copy(rhs);
+        if (!$cast(typed_rhs, rhs))
+            `uvm_fatal("TRANS_COPY", "{{ name }}_trans do_copy type mismatch")
+        // Field example: this.addr = typed_rhs.addr;
+    endfunction
+
+    virtual function bit do_compare(uvm_object rhs, uvm_comparer comparer);
+        {{ name }}_trans typed_rhs;
+        string diff;
+        if (!$cast(typed_rhs, rhs)) begin
+            if (comparer != null)
+                comparer.print_msg("{{ name }}_trans compare type mismatch");
+            return 0;
+        end
+        if (!super.do_compare(rhs, comparer))
+            return 0;
+        if (!self_define_do_compare(typed_rhs, diff, -1)) begin
+            if (comparer != null)
+                comparer.print_msg(diff);
+            return 0;
+        end
         return 1;
+    endfunction
+
+    virtual function string convert2string();
+        return "{{ name }}_trans{}";
+        // Field example: return $sformatf("addr=0x%0h", addr);
+    endfunction
+
+    virtual function void do_print(uvm_printer printer);
+        super.do_print(printer);
+        printer.print_string("summary", convert2string());
+        // Field example: printer.print_field_int("addr", addr, $bits(addr), UVM_HEX);
+    endfunction
+
+    virtual function bit self_define_do_compare(
+        {{ name }}_trans cmp_trans,
+        output string diff,
+        input int kind = -1
+    );
+        diff = "comparison not implemented: add protocol fields to {{ name }}_trans";
+        return 0;
+        // Field example: compare addr/data here and replace the fail-safe return.
     endfunction
 
     virtual function longint unsigned get_scb_stream_id();

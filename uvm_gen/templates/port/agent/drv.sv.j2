@@ -9,7 +9,6 @@ class {{ name }}_drv extends uvm_driver #({{ name }}_trans);
     {{ name }}_agt_cfg    m_cfg;
     virtual {{ name }}_if m_vif;
     int                   m_get_trans_cnt;
-    common_self_debug_scb#({{ name }}_trans)  m_debug_scb;
 
     extern function new(string name="{{ name }}_drv", uvm_component parent=null);
     extern virtual function void build_phase(uvm_phase phase);
@@ -27,8 +26,8 @@ endfunction : new
 
 function void {{ name }}_drv::build_phase(uvm_phase phase);
     super.build_phase(phase);
-    if(!uvm_config_db#(virtual {{ name }}_if)::get(this, "", "m_vif", m_vif)) begin
-        `uvm_fatal(get_full_name, "virtual interface must be set for driver!!!")
+    if (m_vif == null) begin
+        `uvm_fatal("VIF_PROP", "internal VIF propagation failed for driver")
     end
 endfunction : build_phase
 
@@ -41,9 +40,9 @@ task {{ name }}_drv::run_phase(uvm_phase phase);
         fork
             begin
                 case(m_cfg.m_mode)
-                    AGENT_MASTER, AGENT_ONLY_MASTER: master_drive();
-                    AGENT_SLAVE, AGENT_ONLY_SLAVE:   slave_drive();
-                    default: `uvm_fatal(get_full_name, "only-monitor mode should not have driver")
+                    AGENT_MASTER: master_drive();
+                    AGENT_SLAVE:  slave_drive();
+                    default: `uvm_fatal("AGENT_MODE", "monitor-only mode has no driver")
                 endcase
             end
             begin
@@ -71,8 +70,8 @@ endtask : slave_drive
 task {{ name }}_drv::reset_signals();
     //TODO: 将输出信号拉到初始状态
     // 例如:
-    // m_vif.drv_cb.valid <= 1'b0;
-    // m_vif.drv_cb.data  <= '0;
+    // Master output example: m_vif.mst_drv_cb.valid <= 1'b0;
+    // Slave output example:  m_vif.slv_drv_cb.ready <= 1'b0;
 endtask : reset_signals
 
 // 用户自定义复位回调（默认空，用户可 override 注册自定义复位动作）

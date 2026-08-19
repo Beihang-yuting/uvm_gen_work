@@ -119,8 +119,9 @@ def test_reset_finishes_deasserted(tmp_path, platform_type):
     )
 
 
-def test_aip_activity_is_command_owned(tmp_path, platform_type):
-    project_dir = generate(tmp_path, platform_type, aip_core=True)
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_aip_activity_is_command_owned(tmp_path, platform_type, aip_core):
+    project_dir = generate(tmp_path, platform_type, aip_core=aip_core)
     base_sequence = read(
         project_dir, "env/agents/axi_agent/src/axi_base_seq.sv"
     )
@@ -133,15 +134,41 @@ def test_aip_activity_is_command_owned(tmp_path, platform_type):
         task_body(base_sequence, "send_trans_with_rsp")
     )
 
-    assert send_trans.count(tick) == 1
-    assert_in_order(send_trans, "finish_item(tr);", tick)
-    assert send_trans_with_rsp.count(tick) == 1
-    assert_in_order(send_trans_with_rsp, "get_response(rsp);", tick)
+    expected_ticks = 1 if aip_core else 0
+    assert send_trans.count(tick) == expected_ticks
+    assert send_trans_with_rsp.count(tick) == (2 if aip_core else 0)
+    if aip_core:
+        assert_in_order(send_trans, "finish_item(tr);", tick)
+        assert_in_order(
+            send_trans_with_rsp,
+            "finish_item(tr);",
+            tick,
+            "get_response(rsp);",
+            tick,
+        )
+    else:
+        assert tick not in base_sequence
+
+    if platform_type is PlatformType.ADVANCE:
+        send_response = strip_sv_comments(
+            task_body(base_sequence, "send_response")
+        )
+        assert send_response.count(tick) == expected_ticks
+        if aip_core:
+            assert_in_order(send_response, "finish_item(rsp);", tick)
 
     executable_monitor = strip_sv_comments(monitor)
     executable_environment = strip_sv_comments(environment)
     assert tick not in executable_monitor
     assert tick not in executable_environment
+    optional_monitor_tick = """\
+// After assembling one complete transaction:
+// m_ap.write(tr);
+// aip_activity::tick();
+// Enable the tick only when observed bus activity should extend end_test idle.
+// Call it once per completed transaction/accepted beat, never every clock cycle."""
+    normalized_monitor = "\n".join(line.strip() for line in monitor.splitlines())
+    assert (optional_monitor_tick in normalized_monitor) is aip_core
     assert "aip_activity_subscriber" not in executable_environment
     assert "m_axi_act_sub" not in executable_environment
 
@@ -163,13 +190,9 @@ def test_aip_agent_package_imports_core_package(tmp_path, platform_type):
     )
 
 
-def test_activity_subscriber_is_explicit_opt_in(tmp_path, platform_type):
+def test_activity_subscriber_is_not_generated(tmp_path, platform_type):
     project_dir = generate(tmp_path, platform_type, aip_core=True)
-    subscriber = read(project_dir, "common/aip_activity_subscriber.sv")
-
-    assert "EXPLICIT OPT-IN" in subscriber
-    assert "mask a stuck AIP command" in subscriber
-    assert "aip_activity::tick();" in strip_sv_comments(subscriber)
+    assert not (project_dir / "common/aip_activity_subscriber.sv").exists()
 
 
 def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):

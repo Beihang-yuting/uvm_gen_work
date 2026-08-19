@@ -208,3 +208,122 @@ def test_disabled_bind_example_compiles_with_sva_macros(tmp_path):
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_agent_modes_and_vif_ownership_are_standardized(
+    tmp_path, platform_type, aip_core
+):
+    project = generate(tmp_path, platform_type, aip_core=aip_core)
+    sources = {
+        kind: read(project, f"env/agents/axi_agent/src/axi_{kind}.sv")
+        for kind in ("agt_cfg", "agent", "drv", "mon", "sqr", "base_seq")
+    }
+    combined = "\n".join(sources.values())
+    cfg = sources["agt_cfg"]
+    enum_match = re.search(
+        r"typedef\s+enum\s*\{(?P<modes>.*?)\}\s*agent_mode_e\s*;",
+        cfg,
+        flags=re.DOTALL,
+    )
+    assert enum_match is not None
+    assert re.findall(r"\bAGENT_[A-Z_]+\b", enum_match.group("modes")) == [
+        "AGENT_MASTER",
+        "AGENT_SLAVE",
+        "AGENT_ONLY_MONITOR",
+    ]
+    for obsolete in (
+        "AGENT_ONLY_MASTER",
+        "AGENT_ONLY_SLAVE",
+        "MASTER_NO_MONITOR",
+        "SLAVE_NO_MONITOR",
+        "m_self_debug_en",
+        "m_debug_scb",
+        "common_self_debug_scb",
+    ):
+        assert obsolete not in combined
+
+    agent = sources["agent"]
+    assert agent.count("`UVG_VIF_GET(axi_if, m_vif)") == 1
+    assert "m_mon.m_cfg = m_cfg;" in agent
+    assert "m_mon.m_vif = m_vif;" in agent
+    assert "m_sqr.m_cfg = m_cfg;" in agent
+    assert "m_drv.m_cfg = m_cfg;" in agent
+    assert "m_drv.m_vif = m_vif;" in agent
+    assert 'default: `uvm_fatal("AGENT_MODE", "unsupported agent mode")' in agent
+
+    for kind in ("drv", "mon"):
+        child = sources[kind]
+        assert "uvm_config_db#" not in child
+        assert "m_vif == null" in child
+        assert "internal VIF propagation failed" in child
+
+    driver_case = re.search(
+        r"case\s*\(m_cfg\.m_mode\)(?P<body>.*?)endcase",
+        sources["drv"],
+        flags=re.DOTALL,
+    )
+    assert driver_case is not None
+    assert re.findall(
+        r"^\s*(AGENT_[A-Z_]+)\s*:",
+        driver_case.group("body"),
+        flags=re.MULTILINE,
+    ) == [
+        "AGENT_MASTER",
+        "AGENT_SLAVE",
+    ]
+    assert "AGENT_MASTER: master_drive();" in driver_case.group("body")
+    assert "AGENT_SLAVE:  slave_drive();" in driver_case.group("body")
+    assert "monitor-only mode has no driver" in driver_case.group("body")
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_transaction_has_explicit_fail_safe_uvm_hooks(
+    tmp_path, platform_type, aip_core
+):
+    project = generate(tmp_path, platform_type, aip_core=aip_core)
+    transaction = read(project, "env/agents/axi_agent/src/axi_trans.sv")
+
+    assert "`uvm_object_utils(axi_trans)" in transaction
+    assert "`uvm_object_utils_begin" not in transaction
+    for function_name in (
+        "do_copy",
+        "do_compare",
+        "convert2string",
+        "do_print",
+        "self_define_do_compare",
+    ):
+        function_body(transaction, function_name)
+    assert "super.do_copy(rhs);" in function_body(transaction, "do_copy")
+    assert "super.do_compare(rhs, comparer)" in function_body(
+        transaction, "do_compare"
+    )
+    assert "super.do_print(printer);" in function_body(transaction, "do_print")
+    comparison_hook = function_body(transaction, "self_define_do_compare")
+    assert "comparison not implemented" in comparison_hook
+    assert not re.search(r"\breturn\s+1\s*;", comparison_hook)
+    assert "return '1;" in function_body(transaction, "get_scb_stream_id")
+    assert "return -1;" in function_body(transaction, "get_scb_kind")
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_interface_separates_master_slave_and_monitor_clocking(
+    tmp_path, platform_type, aip_core
+):
+    project = generate(tmp_path, platform_type, aip_core=aip_core)
+    interface = read(project, "env/agents/axi_agent/src/axi_if.sv")
+    driver = read(project, "env/agents/axi_agent/src/axi_drv.sv")
+
+    assert "clocking mst_drv_cb @(posedge clk);" in interface
+    assert "clocking slv_drv_cb @(posedge clk);" in interface
+    assert "clocking mon_cb @(posedge clk);" in interface
+    assert not re.search(r"\bclocking\s+drv_cb\b", interface)
+    assert "modport mst_drv_mp (clocking mst_drv_cb);" in interface
+    assert "modport slv_drv_mp (clocking slv_drv_cb);" in interface
+    assert "modport mon_mp     (clocking mon_cb);" in interface
+    assert "M2S protocol fields are outputs; S2M fields are inputs." in interface
+    assert "M2S protocol fields are inputs; S2M fields are outputs." in interface
+    assert "Every observed protocol field is an input." in interface
+    assert "m_vif.drv_cb" not in driver
+    assert "m_vif.mst_drv_cb" in driver
+    assert "m_vif.slv_drv_cb" in driver

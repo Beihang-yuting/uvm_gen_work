@@ -5,25 +5,24 @@
 
 interface {{ name }}_if(input logic clk, input logic rst_n);
 
-    //wire        in_vld;
+    clocking mst_drv_cb @(posedge clk);
+        // default input #1step output #0.1ns;
+        // M2S protocol fields are outputs; S2M fields are inputs.
+    endclocking
 
-    clocking drv_cb @(posedge clk);
-        //default input #1step output #0.1ns;
-        //output  in_vld;
-    endclocking:drv_cb
+    clocking slv_drv_cb @(posedge clk);
+        // default input #1step output #0.1ns;
+        // M2S protocol fields are inputs; S2M fields are outputs.
+    endclocking
 
     clocking mon_cb @(posedge clk);
-        //default input #1step ;
-        //output  in_vld;
-    endclocking:mon_cb
+        // default input #1step;
+        // Every observed protocol field is an input.
+    endclocking
 
-    modport drv_mp (
-        clocking drv_cb
-    );
-
-    modport mon_mp (
-        clocking mon_cb
-    );
+    modport mst_drv_mp (clocking mst_drv_cb);
+    modport slv_drv_mp (clocking slv_drv_cb);
+    modport mon_mp     (clocking mon_cb);
 
 endinterface
 
