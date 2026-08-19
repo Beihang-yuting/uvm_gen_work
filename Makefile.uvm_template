@@ -164,8 +164,7 @@ endif
 	@echo "Run log: $(RUN_LOG)"
 
 rerun: clean
-	+$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) -B cmp
-	+$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) run
+	+$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) -B run
 
 verdi:
 	@if [ "$(WAVE)" = "fsdb" ] && [ -f $(WAVE_DIR)/$(RUN_NAME).fsdb ]; then \

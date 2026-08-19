@@ -1017,6 +1017,18 @@ def test_makefile_fsdb_preflight_fails_clearly(
 def test_makefile_rerun_cleans_compiles_once_then_runs(
     tmp_path, jobs, wave
 ):
+    makefile = tmp_path / "Makefile.uvm_template"
+    shutil.copy2(REPOSITORY / "Makefile.uvm_template", makefile)
+    makefile_source = makefile.read_text(encoding="utf-8")
+    makefile.write_text(
+        makefile_source.replace(
+            "fsdb-preflight:\n",
+            "fsdb-preflight:\n"
+            "\t@printf 'preflight\\n' >> $(PREFLIGHT_LOG)\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
     fake_bin = install_fake_vcs(tmp_path)
     sim_dir = tmp_path / "artifacts/sim"
     stale_path = sim_dir / "runs/stale.marker"
@@ -1034,6 +1046,7 @@ def test_makefile_rerun_cleans_compiles_once_then_runs(
     )
     stale_simv.chmod(0o755)
     event_log = tmp_path / "events.log"
+    preflight_log = tmp_path / "preflight.log"
     verdi_home = tmp_path / "verdi"
     fsdb_pli_dir = verdi_home / "share/PLI/VCS/LINUX64"
     fsdb_pli_dir.mkdir(parents=True)
@@ -1043,7 +1056,7 @@ def test_makefile_rerun_cleans_compiles_once_then_runs(
         "make",
         "--no-print-directory",
         "-f",
-        str(REPOSITORY / "Makefile.uvm_template"),
+        str(makefile),
     ]
     if jobs is not None:
         command.append(f"-j{jobs}")
@@ -1057,6 +1070,7 @@ def test_makefile_rerun_cleans_compiles_once_then_runs(
             "XPROP=1",
             "TEST=tc_rerun",
             "SEED=41",
+            f"PREFLIGHT_LOG={preflight_log}",
         ]
     )
     environment = os.environ.copy()
@@ -1078,9 +1092,15 @@ def test_makefile_rerun_cleans_compiles_once_then_runs(
     )
     output = completed.stdout + completed.stderr
     events = event_log.read_text(encoding="utf-8").splitlines()
+    preflight_events = (
+        preflight_log.read_text(encoding="utf-8").splitlines()
+        if preflight_log.exists()
+        else []
+    )
 
     assert completed.returncode == 0, output
     assert [event.split()[0] for event in events] == ["compile", "run"]
+    assert preflight_events == (["preflight"] if wave == "fsdb" else [])
     assert events[0].count("-o artifacts/sim/build/simv") == 1
     assert "-cm line+cond+fsm+branch+tgl" in events[0]
     assert "-xprop=cfg/xprop.cfg" in events[0]
