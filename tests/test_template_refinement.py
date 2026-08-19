@@ -68,6 +68,164 @@ def active_filelist_lines(source: str) -> list[str]:
     ]
 
 
+def split_config_lines(
+    source: str, comment_prefix: str
+) -> tuple[list[str], list[str]]:
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    comments = [line for line in lines if line.startswith(comment_prefix)]
+    active = [line for line in lines if not line.startswith(comment_prefix)]
+    return active, comments
+
+
+def make_assignment_tokens(source: str, variable: str) -> list[str]:
+    lines = source.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(rf"^{re.escape(variable)}\s*:=", line)
+    ]
+    assert len(starts) == 1, f"expected one {variable} assignment"
+
+    index = starts[0]
+    fragment = lines[index].split(":=", 1)[1].strip()
+    fragments = []
+    while True:
+        continued = fragment.endswith("\\")
+        fragments.append(fragment.removesuffix("\\").strip())
+        if not continued:
+            break
+        index += 1
+        assert index < len(lines), f"unterminated {variable} assignment"
+        fragment = lines[index].strip()
+    return " ".join(fragments).split()
+
+
+def assert_task6_filelist_contract(
+    env_source: str,
+    tb_source: str,
+    expected_tb_lines: list[str],
+    block_name: str = "top",
+    agent_names: tuple[str, ...] = ("axi", "apb"),
+) -> None:
+    env_lines = active_filelist_lines(env_source)
+    tb_lines = active_filelist_lines(tb_source)
+    harness = "../th/harness.sv"
+    block_env = f"../env/{block_name}_env.sv"
+
+    expected_env_lines = [
+        "-F  ../common/common_lib_pkg.f",
+        *[
+            f"-F  ../env/agents/{name}_agent/{name}_agent.f"
+            for name in agent_names
+        ],
+        "+incdir+../env",
+        f"../env/{block_name}_sys_if.sv",
+        f"../env/{block_name}_vsqr.sv",
+        f"../env/{block_name}_rm.sv",
+        f"../env/{block_name}_checker.sv",
+        f"../env/{block_name}_env_cfg.sv",
+        block_env,
+        harness,
+    ]
+    assert env_lines == expected_env_lines
+    assert env_lines[-2:] == [block_env, harness]
+    assert env_lines.count(block_env) == 1
+    assert env_lines.count(harness) == 1
+    assert len(env_lines) == len(set(env_lines))
+    assert tb_lines == expected_tb_lines
+    assert len(tb_lines) == len(set(tb_lines))
+    assert not any(harness in line for line in tb_lines)
+
+    physical_lines = env_source.splitlines()
+    harness_index = physical_lines.index(harness)
+    assert physical_lines[harness_index + 1 :] == [
+        "# Optional bind checks compile after the harness:",
+        "# ../th/bind/bind_example.sv",
+    ]
+
+
+def assert_task6_cfg_contract(
+    xprop: str, initreg: str, coverage: str, wave: str
+) -> None:
+    xprop_active, xprop_comments = split_config_lines(xprop, "//")
+    assert xprop_active == [
+        "merge = tmerge;",
+        "tree {harness} {xpropOn};",
+    ]
+    assert xprop_comments == [
+        "// Compile with: vcs ... -xprop=xprop.cfg -f tb.f",
+        "// tmerge evaluates the 0 and 1 branches and merges their results.",
+        "// xmerge is more pessimistic and directly propagates X.",
+        "// instance {harness.u_dut.u0} {xpropOff};",
+        "// module {sram_model} {xpropOff};",
+    ]
+    assert "xpropMode" not in xprop
+
+    initreg_active, initreg_comments = split_config_lines(initreg, "//")
+    assert initreg_active == ["+vcs+initreg+random"]
+    assert initreg_comments == [
+        "// Pass this response file during compile: vcs ... -f initreg.cfg",
+        "// Alternatives, enable one global policy only:",
+        "// +vcs+initreg+0",
+        "// +vcs+initreg+1",
+    ]
+    assert not re.search(r"(?<!\+vcs)\+initreg\+", initreg)
+
+    coverage_active, coverage_comments = split_config_lines(coverage, "//")
+    assert coverage_active == []
+    assert coverage_comments == [
+        "// Compile: vcs ... -cm line+cond+fsm+tgl+branch "
+        "-cm_hier coverage.cfg",
+        "// Enable after adding a DUT:",
+        "// +tree harness.u_dut",
+        "// -module sram_model",
+    ]
+    assert "-cm_cond" not in coverage
+
+    wave_active, wave_comments = split_config_lines(wave, "#")
+    assert wave_active == [
+        'fsdbDumpfile "wave.fsdb"',
+        'fsdbDumpvars 0 "harness"',
+        "run",
+        "quit",
+    ]
+    assert wave_comments == [
+        "# Run with: ./simv -ucli -i wave.tcl +UVM_TESTNAME=tc_base"
+    ]
+    assert 'fsdbDumpvars 0 "tb"' not in wave
+    assert "\ufffd" not in wave
+
+
+def assert_task6_makefile_contract(makefile: str) -> None:
+    vcs_tokens = make_assignment_tokens(makefile, "VCS_OPTS")
+    assert vcs_tokens == [
+        "-full64",
+        "-sverilog",
+        "-ntb_opts",
+        "uvm-1.2",
+        "-timescale=$(TIMESCALE)",
+        "-debug_access+all",
+        "-kdb",
+        "-lca",
+        "+define+UVM_NO_DEPRECATED",
+        "-f",
+        "$(TB_F)",
+        "-Mdir=$(BUILD_DIR)/csrc",
+        "-o",
+        "$(SIMV)",
+        "-l",
+        "$(CMP_LOG)",
+    ]
+    assert vcs_tokens.count("-f") == 1
+    assert "$(DUT_F)" not in vcs_tokens
+    assert "$(ENV_F)" not in vcs_tokens
+    assert not any(token == "-F" for token in vcs_tokens)
+    assert makefile.count(
+        "SIMV_OPTS += -ucli -i ../../../$(WAVE_TCL)"
+    ) == 1
+    assert "-ucli -do" not in makefile
+
+
 def require_iverilog() -> str:
     executable = shutil.which("iverilog")
     if executable is None:
@@ -445,20 +603,27 @@ def test_interface_separates_master_slave_and_monitor_clocking(
     assert "m_vif.slv_drv_cb" in driver
 
 
-def test_filelist_places_harness_last_in_env_only(tmp_path, platform_type):
-    project = generate(tmp_path, platform_type, aip_core=True)
-    env_lines = active_filelist_lines(read(project, "cfg/env.f"))
-    tb_lines = active_filelist_lines(read(project, "cfg/tb.f"))
-
-    assert env_lines[-1] == "../th/harness.sv"
-    assert tb_lines == [
-        "+incdir+$AIP_HOME/aip_core",
-        "$AIP_HOME/aip_core/aip_core_pkg.sv",
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_filelist_places_harness_last_in_env_only(
+    tmp_path, platform_type, aip_core
+):
+    project = generate(tmp_path, platform_type, aip_core=aip_core)
+    expected_tb_lines = [
         "-F   ./dut.f",
         "-F   ./env.f",
         "-F   ../tc/tc.f",
     ]
-    assert not any("harness.sv" in line for line in tb_lines)
+    if aip_core:
+        expected_tb_lines[:0] = [
+            "+incdir+$AIP_HOME/aip_core",
+            "$AIP_HOME/aip_core/aip_core_pkg.sv",
+        ]
+
+    assert_task6_filelist_contract(
+        read(project, "cfg/env.f"),
+        read(project, "cfg/tb.f"),
+        expected_tb_lines,
+    )
 
 
 def test_cfg_examples_use_reviewed_vcs_syntax(tmp_path, platform_type):
@@ -468,36 +633,148 @@ def test_cfg_examples_use_reviewed_vcs_syntax(tmp_path, platform_type):
     coverage = read(project, "cfg/coverage.cfg")
     wave = read(project, "cfg/wave.tcl")
 
-    assert "merge = tmerge;" in xprop
-    assert "tree {harness} {xpropOn};" in xprop
-    assert "xpropMode" not in xprop
-
-    assert "+vcs+initreg+random" in initreg
-    assert not re.search(r"(?<!\+vcs)\+initreg\+", initreg)
-
-    active_coverage = active_filelist_lines(coverage)
-    assert "-cm_cond obsv" not in coverage
-    assert not any(
-        re.match(r"^[+-]tree\s+harness\.u_dut(?:\s|$)", line)
-        for line in active_coverage
-    )
-
-    assert 'fsdbDumpvars 0 "harness"' in wave
-    assert 'fsdbDumpvars 0 "tb"' not in wave
-    assert "\ufffd" not in wave
+    assert_task6_cfg_contract(xprop, initreg, coverage, wave)
 
 
 def test_makefile_uses_tb_filelist_and_ucli_input_script():
     makefile = (REPOSITORY / "Makefile.uvm_template").read_text(
         encoding="utf-8"
     )
-    vcs_opts = re.search(
-        r"(?ms)^VCS_OPTS\s*:=\s*(?P<body>.*?)(?=^ifeq\b)", makefile
-    )
+    assert_task6_makefile_contract(makefile)
 
-    assert vcs_opts is not None
-    assert vcs_opts.group("body").count("-f $(TB_F)") == 1
-    assert "-f $(DUT_F)" not in vcs_opts.group("body")
-    assert "-f $(ENV_F)" not in vcs_opts.group("body")
-    assert "-ucli -i ../../../$(WAVE_TCL)" in makefile
-    assert "-ucli -do" not in makefile
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        (
+            "../th/harness.sv",
+            "../th/harness.sv\n../th/harness.sv",
+        ),
+        (
+            "# Optional bind checks compile after the harness:",
+            "# bind documentation removed",
+        ),
+        (
+            "-F  ../common/common_lib_pkg.f\n"
+            "-F  ../env/agents/axi_agent/axi_agent.f",
+            "-F  ../env/agents/axi_agent/axi_agent.f\n"
+            "-F  ../common/common_lib_pkg.f",
+        ),
+    ],
+    ids=["duplicate-harness", "missing-bind-comment", "env-order"],
+)
+def test_filelist_contract_rejects_env_mutations(
+    tmp_path, needle, replacement
+):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=True)
+    env_source = read(project, "cfg/env.f")
+    mutated_env = env_source.replace(needle, replacement, 1)
+    assert mutated_env != env_source
+
+    with pytest.raises(AssertionError):
+        assert_task6_filelist_contract(
+            mutated_env,
+            read(project, "cfg/tb.f"),
+            [
+                "+incdir+$AIP_HOME/aip_core",
+                "$AIP_HOME/aip_core/aip_core_pkg.sv",
+                "-F   ./dut.f",
+                "-F   ./env.f",
+                "-F   ../tc/tc.f",
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "needle", "replacement"),
+    [
+        (
+            "cfg/xprop.cfg",
+            "tree {harness} {xpropOn};",
+            "tree {harness} {xpropOn};\nmerge = xmerge;",
+        ),
+        (
+            "cfg/xprop.cfg",
+            "// instance {harness.u_dut.u0} {xpropOff};",
+            "// disabled instance example removed",
+        ),
+        (
+            "cfg/initreg.cfg",
+            "// +vcs+initreg+0",
+            "+vcs+initreg+0",
+        ),
+        (
+            "cfg/coverage.cfg",
+            "// +tree harness.u_dut",
+            "+module unexpected_dut",
+        ),
+        (
+            "cfg/coverage.cfg",
+            "// -module sram_model",
+            "// exclusion example removed",
+        ),
+        (
+            "cfg/wave.tcl",
+            "run\nquit",
+            "quit\nrun",
+        ),
+        (
+            "cfg/wave.tcl",
+            "-ucli -i",
+            "-ucli -do",
+        ),
+    ],
+    ids=[
+        "extra-xprop-directive",
+        "missing-xprop-example",
+        "active-initreg-alternative",
+        "active-coverage-hierarchy",
+        "missing-coverage-exclusion",
+        "wave-command-order",
+        "wave-guidance-option",
+    ],
+)
+def test_cfg_contract_rejects_mutations(
+    tmp_path, relative_path, needle, replacement
+):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    sources = {
+        path: read(project, path)
+        for path in (
+            "cfg/xprop.cfg",
+            "cfg/initreg.cfg",
+            "cfg/coverage.cfg",
+            "cfg/wave.tcl",
+        )
+    }
+    mutated = sources[relative_path].replace(needle, replacement, 1)
+    assert mutated != sources[relative_path]
+    sources[relative_path] = mutated
+
+    with pytest.raises(AssertionError):
+        assert_task6_cfg_contract(
+            sources["cfg/xprop.cfg"],
+            sources["cfg/initreg.cfg"],
+            sources["cfg/coverage.cfg"],
+            sources["cfg/wave.tcl"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ("-f $(TB_F)", "-f $(EXTRA_F) -f $(TB_F)"),
+        ("            -kdb \\", "            "),
+        ("-f $(TB_F)", "-F cfg/rogue.f -f $(TB_F)"),
+    ],
+    ids=["extra-f", "missing-required-flag", "extra-root-file"],
+)
+def test_makefile_contract_rejects_compile_mutations(needle, replacement):
+    makefile = (REPOSITORY / "Makefile.uvm_template").read_text(
+        encoding="utf-8"
+    )
+    mutated = makefile.replace(needle, replacement, 1)
+    assert mutated != makefile
+
+    with pytest.raises(AssertionError):
+        assert_task6_makefile_contract(mutated)
