@@ -585,6 +585,39 @@ def test_common_package_includes_scoreboard_dependencies_in_order(
 
 
 @pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_common_generator_renders_templates_in_dependency_order(
+    tmp_path, aip_core, monkeypatch
+):
+    config = ProjectConfig(
+        block_name="top",
+        author="test",
+        agents=[AgentConfig("axi")],
+        platform_type=PlatformType.ADVANCE,
+        aip_core=aip_core,
+    )
+    generator = CommonGenerator(config)
+    rendered = []
+
+    def record_render(template, *, file_name):
+        rendered.append((file_name, template))
+        return ""
+
+    monkeypatch.setattr(generator, "render_template", record_render)
+    generator.generate(str(tmp_path))
+
+    expected = list(EXPECTED_COMMON_TEMPLATES)
+    if aip_core:
+        expected[-1:-1] = EXPECTED_AIP_TEMPLATES
+        expected.append(
+            (
+                "common_scb_aip_adapter.sv",
+                "common/common_scb_aip_adapter.sv.j2",
+            )
+        )
+    assert rendered == expected
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
 def test_final_common_layout_contract_rejects_generator_or_package_reordering(
     aip_core,
 ):

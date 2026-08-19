@@ -25,7 +25,7 @@ class CommonGenerator(BaseGenerator):
 
         templates = list(self.CORE_TEMPLATES)
         if self.cfg.aip_core:
-            templates.extend(self.AIP_TEMPLATES)
+            templates[-1:-1] = self.AIP_TEMPLATES
         for filename, template in templates:
             content = self.render_template(template, file_name=filename)
             self.write_file(os.path.join(output_dir, filename), content)
