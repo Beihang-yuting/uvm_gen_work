@@ -1307,33 +1307,20 @@ def assert_checker_v2_wiring(checker_raw: str, platform_type: PlatformType) -> N
         )
 
         if platform_type is PlatformType.ADVANCE:
-            for endpoint, suffix in (("rm", "rm"), ("agt", "agt")):
-                declaration = (
-                    rf"(?m)^[ \t]*uvm_analysis_imp_from_{endpoint}_{agent}\s*#\s*"
-                    rf"\(\s*{agent}_trans\s*,\s*top_checker\s*\)\s*"
-                    rf"m_from_{endpoint}_{agent}_imp\s*;"
-                )
-                assert len(re.findall(declaration, checker)) == 1, (
-                    f"missing typed Advance {agent} {suffix} analysis imp"
-                )
-                construction = (
-                    rf"m_from_{endpoint}_{agent}_imp\s*=\s*new\s*\(\s*"
-                    rf"\"m_from_{endpoint}_{agent}_imp\"\s*,\s*this\s*\)\s*;"
-                )
-                assert len(re.findall(construction, checker)) == 1, (
-                    f"missing Advance {agent} {suffix} analysis imp construction"
-                )
-            expected_body = sv_function_body(
+            assert not re.search(
+                rf"\buvm_analysis_(?:imp|port)[^;]*\b{agent}\b", checker
+            ), f"Advance {agent} checker must not expose transaction TLM endpoints"
+            expected_body = sv_task_body(
                 checker,
-                rf"^[ \t]*function\s+void\s+top_checker::write_from_rm_{agent}\s*\(\s*"
-                rf"{agent}_trans\s+tr\s*\)\s*;",
-                f"Advance {agent} expected callback",
+                rf"^[ \t]*task\s+top_checker::send_{agent}_expected\s*\(\s*"
+                rf"input\s+{agent}_trans\s+tr\s*\)\s*;",
+                f"Advance {agent} expected task",
             )
-            actual_body = sv_function_body(
+            actual_body = sv_task_body(
                 checker,
-                rf"^[ \t]*function\s+void\s+top_checker::write_from_agt_{agent}\s*\(\s*"
-                rf"{agent}_trans\s+tr\s*\)\s*;",
-                f"Advance {agent} actual callback",
+                rf"^[ \t]*task\s+top_checker::send_{agent}_actual\s*\(\s*"
+                rf"input\s+{agent}_trans\s+tr\s*\)\s*;",
+                f"Advance {agent} actual task",
             )
         else:
             for direction in ("rm", "agt"):
@@ -1405,38 +1392,19 @@ def assert_checker_v2_wiring(checker_raw: str, platform_type: PlatformType) -> N
 def assert_advance_rm_and_env_wiring(rm_raw: str, env_raw: str) -> None:
     rm = strip_sv_comments(rm_raw)
     for agent in SCB_WIRING_AGENTS:
-        assert re.search(
-            rf"(?m)^[ \t]*uvm_analysis_imp_from_{agent}_agt\s*#\s*\(\s*"
-            rf"{agent}_trans\s*,\s*top_rm\s*\)\s*m_from_{agent}_agt_imp\s*;",
+        assert not re.search(
+            rf"\buvm_analysis_(?:imp|port)[^;]*\b{agent}\b", rm
+        ), f"Advance RM {agent} must not expose transaction TLM endpoints"
+        prediction = sv_task_body(
             rm,
-        ), f"missing typed Advance RM {agent} analysis imp"
-        assert re.search(
-            rf"(?m)^[ \t]*uvm_analysis_port\s*#\s*\(\s*{agent}_trans\s*\)\s*"
-            rf"m_{agent}_expected_ap\s*;",
-            rm,
-        ), f"missing typed Advance RM {agent} expected port"
-        for member in (
-            f"m_from_{agent}_agt_imp",
-            f"m_{agent}_expected_ap",
-        ):
-            assert re.search(
-                rf"\b{member}\s*=\s*new\s*\(\s*\"{member}\"\s*,\s*this\s*\)\s*;",
-                rm,
-            ), f"Advance RM must construct {member}"
-        callback = sv_function_body(
-            rm,
-            rf"^[ \t]*function\s+void\s+top_rm::write_from_{agent}_agt\s*\(\s*"
-            rf"{agent}_trans\s+tr\s*\)\s*;",
-            f"Advance RM {agent} callback",
+            rf"^[ \t]*task\s+top_rm::predict_{agent}\s*\(\s*input\s+"
+            rf"{agent}_trans\s+observed\s*,\s*ref\s+{agent}_trans\s+"
+            rf"expected_q\s*\[\s*\$\s*\]\s*\)\s*;",
+            f"Advance RM {agent} prediction task",
         )
         assert re.search(
-            rf"\bm_{agent}_expected_ap\s*\.\s*write\s*\(\s*null\s*\)\s*;",
-            callback,
-        ), f"Advance RM must preserve null {agent} predictions"
-        assert re.search(
-            rf"\bm_{agent}_expected_ap\s*\.\s*write\s*\(\s*prediction\s*\)\s*;",
-            callback,
-        ), f"Advance RM must publish isolated {agent} predictions"
+            r"\bexpected_q\s*\.\s*delete\s*\(\s*\)\s*;", prediction
+        ), f"Advance RM must clear stale {agent} predictions"
 
     env = sv_function_body(
         env_raw,
@@ -1444,16 +1412,18 @@ def assert_advance_rm_and_env_wiring(rm_raw: str, env_raw: str) -> None:
         "Advance env connect_phase",
     )
     for agent in SCB_WIRING_AGENTS:
-        expected_connections = (
-            rf"\bm_{agent}_agt\s*\.\s*m_mon\s*\.\s*m_ap\s*\.\s*connect\s*\(\s*"
-            rf"m_rm\s*\.\s*m_from_{agent}_agt_imp\s*\)\s*;",
-            rf"\bm_rm\s*\.\s*m_{agent}_expected_ap\s*\.\s*connect\s*\(\s*"
-            rf"m_scb\s*\.\s*m_from_rm_{agent}_imp\s*\)\s*;",
-            rf"\bm_{agent}_agt\s*\.\s*m_mon\s*\.\s*m_ap\s*\.\s*connect\s*\(\s*"
-            rf"m_scb\s*\.\s*m_from_agt_{agent}_imp\s*\)\s*;",
+        forbidden_connections = (
+            rf"\bm_{agent}_agt\b[^;]*\bm_ap\s*\.\s*connect\s*\(",
+            rf"\bm_rm\b[^;]*\bm_{agent}_expected_ap\s*\.\s*connect\s*\(",
         )
-        for connection in expected_connections:
-            assert re.search(connection, env), f"missing Advance {agent} data path"
+        for connection in forbidden_connections:
+            assert not re.search(connection, env), (
+                f"Advance {agent} transaction routing must remain user-owned"
+            )
+        assert (
+            f"Flow: get_mon_item -> predict_{agent} -> "
+            f"send_{agent}_actual/send_{agent}_expected"
+        ) in env_raw
 
     assert "uvm_sequence_item" not in rm
     assert "cast_tr" not in rm
@@ -1509,12 +1479,11 @@ def checker_direction_body(
     checker: str, platform_type: PlatformType, agent: str, direction: str
 ) -> str:
     if platform_type is PlatformType.ADVANCE:
-        source = "rm" if direction == "expected" else "agt"
-        return sv_function_body(
+        return sv_task_body(
             checker,
-            rf"^[ \t]*function\s+void\s+top_checker::write_from_{source}_{agent}\s*"
-            rf"\(\s*{agent}_trans\s+tr\s*\)\s*;",
-            f"Advance {agent} {direction} callback",
+            rf"^[ \t]*task\s+top_checker::send_{agent}_{direction}\s*"
+            rf"\(\s*input\s+{agent}_trans\s+tr\s*\)\s*;",
+            f"Advance {agent} {direction} task",
         )
     source = "rm" if direction == "expected" else "agt"
     return sv_task_body(
@@ -1564,7 +1533,7 @@ def test_null_routing_contract_rejects_missing_expected_or_actual_guards(
     for direction in ("expected", "actual"):
         source = "rm" if direction == "expected" else "agt"
         marker = (
-            f"write_from_{source}_axi"
+            f"send_axi_{direction}"
             if platform_type is PlatformType.ADVANCE
             else f"process_axi_trans_from_{source}"
         )
@@ -1584,11 +1553,12 @@ def test_null_routing_contract_rejects_missing_expected_or_actual_guards(
 
 def rm_prediction_body(rm: str, platform_type: PlatformType, agent: str) -> str:
     if platform_type is PlatformType.ADVANCE:
-        return sv_function_body(
+        return sv_task_body(
             rm,
-            rf"^[ \t]*function\s+void\s+top_rm::write_from_{agent}_agt\s*"
-            rf"\(\s*{agent}_trans\s+tr\s*\)\s*;",
-            f"Advance RM {agent} prediction callback",
+            rf"^[ \t]*task\s+top_rm::predict_{agent}\s*\(\s*input\s+"
+            rf"{agent}_trans\s+observed\s*,\s*ref\s+{agent}_trans\s+"
+            rf"expected_q\s*\[\s*\$\s*\]\s*\)\s*;",
+            f"Advance RM {agent} prediction task",
         )
     return sv_task_body(
         rm,
@@ -1601,13 +1571,27 @@ def assert_rm_prediction_handle_isolation(
     rm_raw: str, platform_type: PlatformType
 ) -> None:
     rm = strip_sv_comments(rm_raw)
+    if platform_type is PlatformType.ADVANCE:
+        assert rm_raw.count("// if (!$cast(expected, observed.clone()))") == len(
+            SCB_WIRING_AGENTS
+        )
     for agent in SCB_WIRING_AGENTS:
         body = rm_prediction_body(rm, platform_type, agent)
-        output = (
-            f"m_{agent}_expected_ap"
-            if platform_type is PlatformType.ADVANCE
-            else f"m_rm_{agent}_trans_to_scb_port"
-        )
+        if platform_type is PlatformType.ADVANCE:
+            assert re.search(
+                r"\bexpected_q\s*\.\s*delete\s*\(\s*\)\s*;", body
+            ), f"Advance RM must clear stale {agent} predictions"
+            assert not re.search(
+                r"\bexpected_q\s*\.\s*push_back\s*\(\s*observed\s*\)", body
+            ), f"Advance RM must not enqueue the observed handle directly"
+            assert f"// {agent}_trans expected;" in rm_raw
+            assert (
+                "// Update expected from reference model, then "
+                "expected_q.push_back(expected)."
+            ) in rm_raw
+            continue
+
+        output = f"m_rm_{agent}_trans_to_scb_port"
         assert re.search(
             rf"(?m)^[ \t]*uvm_object\s+cloned\s*;", body
         ), f"{agent} RM must store the clone as an object before casting"
@@ -1658,19 +1642,21 @@ def test_rm_isolation_contract_rejects_direct_publish_or_missing_clone(
     project = generate(tmp_path, platform_type)
     rm = read(project, "env/top_rm.sv")
     assert_rm_prediction_handle_isolation(rm, platform_type)
-    output = (
-        "m_axi_expected_ap"
-        if platform_type is PlatformType.ADVANCE
-        else "m_rm_axi_trans_to_scb_port"
-    )
-    direct_publish = rm.replace(
-        f"{output}.write(prediction);", f"{output}.write(tr);", 1
-    )
+    if platform_type is PlatformType.ADVANCE:
+        direct_publish = rm.replace(
+            "expected_q.delete();", "expected_q.push_back(observed);", 1
+        )
+        missing_clone = rm.replace("observed.clone()", "observed", 1)
+    else:
+        output = "m_rm_axi_trans_to_scb_port"
+        direct_publish = rm.replace(
+            f"{output}.write(prediction);", f"{output}.write(tr);", 1
+        )
+        missing_clone = rm.replace("cloned = tr.clone();", "cloned = null;", 1)
     assert direct_publish != rm, "failed to construct direct-publish mutation"
     with pytest.raises(AssertionError):
         assert_rm_prediction_handle_isolation(direct_publish, platform_type)
 
-    missing_clone = rm.replace("cloned = tr.clone();", "cloned = null;", 1)
     assert missing_clone != rm, "failed to construct missing-clone mutation"
     with pytest.raises(AssertionError):
         assert_rm_prediction_handle_isolation(missing_clone, platform_type)
@@ -2089,7 +2075,7 @@ def test_generated_advance_rm_and_env_have_typed_expected_actual_paths(tmp_path)
     )
 
 
-def test_wiring_contracts_reject_swaps_missing_agents_and_disconnected_paths(
+def test_wiring_contracts_reject_swaps_missing_agents_and_env_transaction_paths(
     tmp_path,
 ):
     advance = generate(tmp_path / "advance", PlatformType.ADVANCE)
@@ -2111,9 +2097,14 @@ def test_wiring_contracts_reject_swaps_missing_agents_and_disconnected_paths(
     with pytest.raises(AssertionError):
         assert_checker_v2_wiring(missing_agent, PlatformType.ADVANCE)
 
-    disconnected = env.replace(
-        "m_rm.m_apb_expected_ap.connect(", "m_rm.m_apb_expected_ap.disconnect(", 1
+    connected = env.replace(
+        "    // connect vsqr sqr handles",
+        "    m_apb_agt.m_mon.m_ap.connect(m_rm.m_from_apb_agt_imp);\n"
+        "    // connect vsqr sqr handles",
+        1,
     )
-    assert disconnected != env, "failed to construct disconnected-path mutation"
+    assert connected != env, (
+        "failed to construct executable transaction-path mutation"
+    )
     with pytest.raises(AssertionError):
-        assert_advance_rm_and_env_wiring(rm, disconnected)
+        assert_advance_rm_and_env_wiring(rm, connected)

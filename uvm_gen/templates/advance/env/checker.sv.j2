@@ -10,14 +10,7 @@ class {{ block_name }}_checker extends uvm_scoreboard;
     int     m_scb_rec_rm_trans_total_cnt;
     int     m_scb_rec_dut_trans_total_cnt;
 
-    // dec analysis imp — self-contained: receive from rm and agents directly
 {% for agent in agents %}
-    `uvm_analysis_imp_decl(_from_rm_{{ agent.name }})
-    `uvm_analysis_imp_decl(_from_agt_{{ agent.name }})
-    uvm_analysis_imp_from_rm_{{ agent.name }}#({{ agent.name }}_trans, {{ block_name }}_checker)
-        m_from_rm_{{ agent.name }}_imp;
-    uvm_analysis_imp_from_agt_{{ agent.name }}#({{ agent.name }}_trans, {{ block_name }}_checker)
-        m_from_agt_{{ agent.name }}_imp;
     common_uvm_scb#({{ agent.name }}_trans) m_{{ agent.name }}_scb;
 {% endfor %}
 
@@ -27,8 +20,8 @@ class {{ block_name }}_checker extends uvm_scoreboard;
     extern virtual function void reset_state();
     extern virtual task reset_phase(uvm_phase phase);
 {% for agent in agents %}
-    extern virtual function void write_from_rm_{{ agent.name }}({{ agent.name }}_trans tr);
-    extern virtual function void write_from_agt_{{ agent.name }}({{ agent.name }}_trans tr);
+    extern virtual task send_{{ agent.name }}_actual(input {{ agent.name }}_trans tr);
+    extern virtual task send_{{ agent.name }}_expected(input {{ agent.name }}_trans tr);
 {% endfor %}
 
 endclass
@@ -42,8 +35,6 @@ endfunction
 function void {{ block_name }}_checker::build_phase(uvm_phase phase);
     super.build_phase(phase);
 {% for agent in agents %}
-    m_from_rm_{{ agent.name }}_imp  = new("m_from_rm_{{ agent.name }}_imp", this);
-    m_from_agt_{{ agent.name }}_imp = new("m_from_agt_{{ agent.name }}_imp", this);
     m_{{ agent.name }}_scb = common_uvm_scb#({{ agent.name }}_trans)::type_id::create(
         "m_{{ agent.name }}_scb", this);
 {% endfor %}
@@ -55,18 +46,7 @@ task {{ block_name }}_checker::run_phase(uvm_phase phase);
 endtask
 
 {% for agent in agents %}
-function void {{ block_name }}_checker::write_from_rm_{{ agent.name }}({{ agent.name }}_trans tr);
-    m_scb_rec_rm_trans_total_cnt++;
-    if (tr == null) begin
-        m_{{ agent.name }}_scb.push_expected(tr, '1, -1);
-    end
-    else begin
-        m_{{ agent.name }}_scb.push_expected(
-            tr, tr.get_scb_stream_id(), tr.get_scb_kind());
-    end
-endfunction
-
-function void {{ block_name }}_checker::write_from_agt_{{ agent.name }}({{ agent.name }}_trans tr);
+task {{ block_name }}_checker::send_{{ agent.name }}_actual(input {{ agent.name }}_trans tr);
     m_scb_rec_dut_trans_total_cnt++;
     if (tr == null) begin
         m_{{ agent.name }}_scb.push_actual(tr, '1, -1);
@@ -75,7 +55,18 @@ function void {{ block_name }}_checker::write_from_agt_{{ agent.name }}({{ agent
         m_{{ agent.name }}_scb.push_actual(
             tr, tr.get_scb_stream_id(), tr.get_scb_kind());
     end
-endfunction
+endtask : send_{{ agent.name }}_actual
+
+task {{ block_name }}_checker::send_{{ agent.name }}_expected(input {{ agent.name }}_trans tr);
+    m_scb_rec_rm_trans_total_cnt++;
+    if (tr == null) begin
+        m_{{ agent.name }}_scb.push_expected(tr, '1, -1);
+    end
+    else begin
+        m_{{ agent.name }}_scb.push_expected(
+            tr, tr.get_scb_stream_id(), tr.get_scb_kind());
+    end
+endtask : send_{{ agent.name }}_expected
 
 {% endfor %}
 function void {{ block_name }}_checker::reset_state();

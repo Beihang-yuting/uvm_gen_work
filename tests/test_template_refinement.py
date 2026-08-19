@@ -278,6 +278,61 @@ def test_agent_modes_and_vif_ownership_are_standardized(
 
 
 @pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_advance_uses_task_only_transaction_routing(tmp_path, aip_core):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=aip_core)
+    agent = read(project, "env/agents/axi_agent/src/axi_agent.sv")
+    sequencer = read(project, "env/agents/axi_agent/src/axi_sqr.sv")
+    base_sequence = read(project, "env/agents/axi_agent/src/axi_base_seq.sv")
+    rm = read(project, "env/top_rm.sv")
+    checker = read(project, "env/top_checker.sv")
+    env = read(project, "env/top_env.sv")
+    active_env = strip_sv_comments(env)
+
+    assert "task axi_agent::get_mon_item" in agent
+    assert "function bit axi_agent::try_get_mon_item" in agent
+    assert (
+        len(
+            re.findall(
+                r"uvm_tlm_analysis_fifo\s*#\s*\(\s*axi_trans\s*\)", agent
+            )
+        )
+        == 1
+    )
+    assert "only one external consumer" in agent
+    for obsolete_fifo in ("m_req_fifo", "m_rsp_fifo"):
+        assert obsolete_fifo not in agent + sequencer
+    assert "m_mon_fifo" not in sequencer
+    assert "wait_trans" not in base_sequence
+    assert "wait_request" not in base_sequence
+
+    assert "task top_rm::predict_axi" in rm
+    assert "task top_checker::send_axi_actual" in checker
+    assert "task top_checker::send_axi_expected" in checker
+    assert "m_ap.connect(m_rm" not in active_env
+    assert "m_ap.connect(m_scb" not in active_env
+    assert "m_expected_ap.connect" not in active_env
+    assert (
+        "Flow: get_mon_item -> predict_axi -> "
+        "send_axi_actual/send_axi_expected"
+    ) in env
+
+
+def test_port_retains_env_owned_fifo_lifecycle(tmp_path):
+    project = generate(tmp_path, PlatformType.PORT, aip_core=False)
+    env = read(project, "env/top_env.sv")
+
+    for fifo in (
+        "m_axi_agt_mon_to_rm_fifo",
+        "m_rm_axi_trans_to_scb_fifo",
+        "m_agt_axi_trans_to_scb_fifo",
+    ):
+        assert fifo in env
+    assert "m_rm.stop_workers();" in env
+    assert "m_scb.wait_for_workers_stopped();" in env
+    assert "m_rm.request_workers_restart();" in env
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
 def test_transaction_has_explicit_fail_safe_uvm_hooks(
     tmp_path, platform_type, aip_core
 ):
