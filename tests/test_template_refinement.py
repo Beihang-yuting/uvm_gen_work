@@ -104,6 +104,31 @@ def make_assignment_tokens(source: str, variable: str) -> list[str]:
     return " ".join(fragments).split()
 
 
+def nested_filelist_targets(filelist: Path) -> list[Path]:
+    targets = []
+    for line in active_filelist_lines(filelist.read_text(encoding="utf-8")):
+        match = re.match(r"^-F\s+(.+)$", line)
+        if match:
+            targets.append((filelist.parent / match.group(1)).resolve())
+    return targets
+
+
+def run_make(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "-f",
+            str(REPOSITORY / "Makefile.uvm_template"),
+            *arguments,
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def assert_task6_filelist_contract(
     env_source: str,
     tb_source: str,
@@ -210,7 +235,7 @@ def assert_task6_makefile_contract(makefile: str) -> None:
         "-kdb",
         "-lca",
         "+define+UVM_NO_DEPRECATED",
-        "-f",
+        "-F",
         "$(TB_F)",
         "-Mdir=$(BUILD_DIR)/csrc",
         "-o",
@@ -218,13 +243,14 @@ def assert_task6_makefile_contract(makefile: str) -> None:
         "-l",
         "$(CMP_LOG)",
     ]
-    assert vcs_tokens.count("-f") == 1
+    assert vcs_tokens.count("-F") == 1
+    assert "-f" not in vcs_tokens
     assert "$(DUT_F)" not in vcs_tokens
     assert "$(ENV_F)" not in vcs_tokens
-    assert not any(token == "-F" for token in vcs_tokens)
     assert makefile.count(
-        "SIMV_OPTS += -ucli -i ../../../$(WAVE_TCL)"
+        "SIMV_OPTS += -ucli -i $(WAVE_TCL)"
     ) == 1
+    assert "WAVE      ?= none" in makefile
     assert "-ucli -do" not in makefile
 
 
@@ -771,9 +797,9 @@ def test_cfg_contract_rejects_mutations(
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ("-f $(TB_F)", "-f $(EXTRA_F) -f $(TB_F)"),
+        ("-F $(TB_F)", "-F $(EXTRA_F) -F $(TB_F)"),
         ("            -kdb \\", "            "),
-        ("-f $(TB_F)", "-F cfg/rogue.f -f $(TB_F)"),
+        ("-F $(TB_F)", "-F cfg/rogue.f -F $(TB_F)"),
     ],
     ids=["extra-f", "missing-required-flag", "extra-root-file"],
 )
@@ -853,3 +879,84 @@ def test_cfg_contract_allows_optional_prose_and_wave_plusarg_omission(
         read(project, "cfg/coverage.cfg"),
         wave,
     )
+
+
+def test_filelist_nested_paths_resolve_from_each_list_location(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type, aip_core=False)
+    tb_targets = nested_filelist_targets(project / "cfg/tb.f")
+
+    assert tb_targets == [
+        (project / "cfg/dut.f").resolve(),
+        (project / "cfg/env.f").resolve(),
+        (project / "tc/tc.f").resolve(),
+    ]
+    assert all(target.is_file() for target in tb_targets)
+
+    env_targets = nested_filelist_targets(project / "cfg/env.f")
+    assert env_targets == [
+        (project / "common/common_lib_pkg.f").resolve(),
+        (project / "env/agents/axi_agent/axi_agent.f").resolve(),
+        (project / "env/agents/apb_agent/apb_agent.f").resolve(),
+    ]
+    assert all(target.is_file() for target in env_targets)
+
+
+@pytest.mark.parametrize(
+    "sim_dir", ["sim", "artifacts/sim"], ids=["default", "nested"]
+)
+def test_makefile_dry_run_uses_absolute_simv_runtime_paths(tmp_path, sim_dir):
+    completed = run_make(
+        tmp_path,
+        "-n",
+        "run",
+        f"SIM_DIR={sim_dir}",
+        "TEST=tc_smoke",
+        "SEED=17",
+        "COV=1",
+        "WAVE=fsdb",
+        "VERDI_HOME=/synthetic/verdi",
+    )
+    output = completed.stdout + completed.stderr
+    sim_root = (tmp_path / sim_dir).resolve()
+
+    assert completed.returncode == 0, output
+    assert "-F cfg/tb.f" in output
+    assert f"-l {sim_root}/logs/run_tc_smoke_17.log" in output
+    assert f"-cm_dir {sim_root}/cov/simv.vdb" in output
+    assert f"-ucli -i {(tmp_path / 'cfg/wave.tcl').resolve()}" in output
+    assert "-P /synthetic/verdi/share/PLI/VCS/LINUX64/novas.tab" in output
+    assert "/synthetic/verdi/share/PLI/VCS/LINUX64/pli.a" in output
+    assert "../../../" not in output
+
+
+def test_makefile_default_wave_is_usable_without_fsdb(tmp_path):
+    completed = run_make(tmp_path, "-n", "run")
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode == 0, output
+    assert "-ucli" not in output
+    assert "novas.tab" not in output
+
+
+@pytest.mark.parametrize(
+    ("verdi_home", "diagnostic"),
+    [("", "VERDI_HOME"), ("/missing/verdi", "FSDB PLI")],
+    ids=["unset", "missing-files"],
+)
+def test_makefile_fsdb_preflight_fails_clearly(
+    tmp_path, verdi_home, diagnostic
+):
+    completed = run_make(
+        tmp_path,
+        "run",
+        "WAVE=fsdb",
+        f"VERDI_HOME={verdi_home}",
+    )
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode != 0
+    assert diagnostic in output
+    assert "vcs " not in output
+    assert "simv" not in output
