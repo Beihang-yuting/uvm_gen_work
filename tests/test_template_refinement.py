@@ -156,25 +156,12 @@ def assert_task6_cfg_contract(
         "merge = tmerge;",
         "tree {harness} {xpropOn};",
     ]
-    assert any(
-        re.search(r"\bvcs\b.*-xprop=xprop\.cfg.*-f\s+tb\.f", comment)
-        for comment in xprop_comments
-    )
-    assert any(
-        re.search(r"\btmerge\b.*\bmerg", comment, flags=re.IGNORECASE)
-        for comment in xprop_comments
-    )
-    assert any("xmerge" in comment for comment in xprop_comments)
     assert "instance {harness.u_dut.u0} {xpropOff};" in xprop_comments
     assert "module {sram_model} {xpropOff};" in xprop_comments
     assert "xpropMode" not in xprop
 
     initreg_active, initreg_comments = split_config_lines(initreg, "//")
     assert initreg_active == ["+vcs+initreg+random"]
-    assert any(
-        re.search(r"\bvcs\b.*-f\s+initreg\.cfg", comment)
-        for comment in initreg_comments
-    )
     assert "+vcs+initreg+0" in initreg_comments
     assert "+vcs+initreg+1" in initreg_comments
     assert not re.search(r"(?<!\+vcs)\+initreg\+", initreg)
@@ -202,8 +189,7 @@ def assert_task6_cfg_contract(
     ]
     assert any(
         re.search(
-            r"\./simv\b.*-ucli\s+-i\s+wave\.tcl.*"
-            r"\+UVM_TESTNAME=tc_base",
+            r"\bsimv\b.*-ucli\s+-i\s+wave\.tcl(?:\s|$)",
             comment,
         )
         for comment in wave_comments
@@ -836,4 +822,34 @@ def test_cfg_contract_allows_harmless_comments_and_wording(tmp_path):
         initreg + "// Local initreg note\n",
         coverage,
         wave + "# Local waveform note\n",
+    )
+
+
+def test_cfg_contract_allows_optional_prose_and_wave_plusarg_omission(
+    tmp_path,
+):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    optional_xprop_comments = {
+        "// Compile with: vcs ... -xprop=xprop.cfg -f tb.f",
+        "// tmerge evaluates the 0 and 1 branches and merges their results.",
+        "// xmerge is more pessimistic and directly propagates X.",
+    }
+    xprop = "\n".join(
+        line
+        for line in read(project, "cfg/xprop.cfg").splitlines()
+        if line not in optional_xprop_comments
+    )
+    initreg = read(project, "cfg/initreg.cfg").replace(
+        "// Pass this response file during compile: vcs ... -f initreg.cfg\n",
+        "",
+    )
+    wave = read(project, "cfg/wave.tcl").replace(
+        " +UVM_TESTNAME=tc_base", ""
+    )
+
+    assert_task6_cfg_contract(
+        xprop,
+        initreg,
+        read(project, "cfg/coverage.cfg"),
+        wave,
     )
