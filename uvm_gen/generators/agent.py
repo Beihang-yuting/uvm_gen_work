@@ -2,6 +2,7 @@ import os
 
 from ..config import AgentConfig, ProjectConfig
 from .base import BaseGenerator
+from .common import CommonGenerator
 
 
 class AgentGenerator(BaseGenerator):
@@ -17,7 +18,12 @@ class AgentGenerator(BaseGenerator):
         ("if.sv", "if.sv.j2"),
     ]
 
-    def generate_agent(self, agent_cfg: AgentConfig, output_dir: str) -> None:
+    def generate_agent(
+        self,
+        agent_cfg: AgentConfig,
+        output_dir: str,
+        standalone: bool = False,
+    ) -> None:
         name = agent_cfg.name
         agent_dir = os.path.join(output_dir, f"{name}_agent")
         src_dir = os.path.join(agent_dir, "src")
@@ -38,9 +44,22 @@ class AgentGenerator(BaseGenerator):
         f_content = self.render_template(template_path, file_name=f"{name}_agent.f", **ctx)
         self.write_file(os.path.join(agent_dir, f"{name}_agent.f"), f_content)
 
-        self.generate_test_env(agent_cfg, agent_dir)
+        self.generate_test_env(agent_cfg, agent_dir, standalone=standalone)
 
-    def generate_test_env(self, agent_cfg: AgentConfig, agent_dir: str) -> None:
+        if standalone:
+            CommonGenerator(self.cfg).generate(os.path.join(agent_dir, "common"))
+
+    def generate_standalone(
+        self, agent_cfg: AgentConfig, output_dir: str
+    ) -> None:
+        self.generate_agent(agent_cfg, output_dir, standalone=True)
+
+    def generate_test_env(
+        self,
+        agent_cfg: AgentConfig,
+        agent_dir: str,
+        standalone: bool = False,
+    ) -> None:
         name = agent_cfg.name
         test_env_dir = os.path.join(agent_dir, "test_env")
         os.makedirs(test_env_dir, exist_ok=True)
@@ -49,6 +68,7 @@ class AgentGenerator(BaseGenerator):
             "name": name,
             "name_upper": name.upper(),
             "agents": [agent_cfg],
+            "standalone": standalone,
         }
 
         templates = [

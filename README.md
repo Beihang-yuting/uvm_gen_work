@@ -274,10 +274,13 @@ also provides `UVG_VIF_SET`, `UVG_VIF_GET`, `UVG_CLK`, `UVG_RSTN`, and
 `UVG_STATIC_ASSERT`; `UVG_SVA_NO_X` and `UVG_SVA_HOLD` are available from the
 generated bind helper.
 
-`th/harness.sv` is the final active source in `cfg/env.f`. The optional
-`th/bind/bind_example.sv` line follows it but is commented out, so bind checks
-are disabled by default. Uncomment that line and define or edit the examples in
-`th/bind/bind_example.sv` when the DUT hierarchy is known.
+`th/harness.sv` is the final active source in `cfg/env.f`. The filelist adds
+`th/bind` to the include search path immediately before it. The optional
+`th/bind/bind_example.sv` line follows the harness but is commented out, so
+bind checks are disabled by default. Uncomment that line and define or edit the
+examples in `th/bind/bind_example.sv` when the DUT hierarchy is known. Its
+stable `common_sva.svh` include works with both the documented project-root
+`-F cfg/tb.f` flow and runners launched from `cfg`.
 
 ## aip_core Integration
 
@@ -302,6 +305,9 @@ and again after response completion. If monitor-observed bus or C-driven
 traffic must extend the AIP idle window, enable the commented monitor tick once
 per completed transaction or accepted beat, never once per clock. The AIP
 `end_test timeout` remains the safeguard for a source that never becomes idle.
+Because all AIP activity shares one counter, unrelated monitor traffic can
+keep the `end_test` idle wait and a stalled AIP command watchdog alive. Enable
+the monitor tick only when that shared lifetime is intentional.
 
 ## Optional VCS Makefile
 

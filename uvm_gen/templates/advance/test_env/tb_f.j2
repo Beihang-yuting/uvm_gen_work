@@ -1,8 +1,11 @@
-+incdir+../src
--f ../{{ name }}_agent.f
+{% if aip_core %}
++incdir+$AIP_HOME/aip_core
+$AIP_HOME/aip_core/aip_core_pkg.sv
+{% endif %}
+-F ./env.f
 
-+incdir+./
-./{{ name }}_test_env_cfg.sv
-./{{ name }}_test_env.sv
-./{{ name }}_base_test.sv
-./{{ name }}_test_harness.sv
++incdir+../
+../{{ name }}_test_env_cfg.sv
+../{{ name }}_test_env.sv
+../{{ name }}_base_test.sv
+../{{ name }}_test_harness.sv

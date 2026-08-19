@@ -261,6 +261,21 @@ run_vcs_compile() {
     reject_bad_log "${console_log}"
 }
 
+root_bind_env_file="${run_dir}/cfg/env.f"
+if [[ $(grep -Fxc '# ../th/bind/bind_example.sv' \
+        "${root_bind_env_file}" || true) -ne 1 ]]; then
+    fail 'optional bind source is not disabled exactly once in cfg/env.f'
+    exit 1
+fi
+sed -i \
+    's|^# ../th/bind/bind_example.sv$|../th/bind/bind_example.sv|' \
+    "${root_bind_env_file}"
+
+cd "${run_dir}"
+run_vcs_compile root_bind \
+    -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+    -F cfg/tb.f -top harness -o simv_root_bind
+
 cd "${run_dir}/cfg"
 
 run_vcs_compile template \

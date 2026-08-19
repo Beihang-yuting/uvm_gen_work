@@ -61,6 +61,8 @@ task {{ name }}_mon::mon_transaction();
     // aip_activity::tick();
     // Enable the tick only when observed bus activity should extend end_test idle.
     // Call it once per completed transaction/accepted beat, never every clock cycle.
+    // WARNING: AIP activity uses shared state; unrelated monitor traffic can
+    // keep end_test idle and a stalled AIP command watchdog alive.
 {% endif %}
     @(negedge m_vif.rst_n);
 endtask

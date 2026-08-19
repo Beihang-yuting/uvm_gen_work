@@ -179,7 +179,9 @@ def test_aip_activity_is_command_owned(tmp_path, platform_type, aip_core):
 // m_ap.write(tr);
 // aip_activity::tick();
 // Enable the tick only when observed bus activity should extend end_test idle.
-// Call it once per completed transaction/accepted beat, never every clock cycle."""
+// Call it once per completed transaction/accepted beat, never every clock cycle.
+// WARNING: AIP activity uses shared state; unrelated monitor traffic can
+// keep end_test idle and a stalled AIP command watchdog alive."""
     normalized_monitor = "\n".join(line.strip() for line in monitor.splitlines())
     assert (optional_monitor_tick in normalized_monitor) is aip_core
     assert "aip_activity_subscriber" not in executable_environment

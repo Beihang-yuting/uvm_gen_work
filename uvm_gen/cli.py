@@ -269,7 +269,7 @@ def run_from_args(args):
             aip_core=args.aip_core,
         )
         gen = AgentGenerator(cfg)
-        gen.generate_agent(agent_cfg, args.output)
+        gen.generate_standalone(agent_cfg, args.output)
         print("\n  %s %s/%s_agent/\n" % (_green("Agent generated:"), args.output, agent_cfg.name))
 
 
@@ -342,7 +342,7 @@ def interactive_mode():
 
     # Step 3: aip_core toggle
     _step_header(3, "aip_core Integration")
-    print("    %s" % _dim("Adds TCL bridge, aip_log, aip_clk, activity subscriber"))
+    print("    %s" % _dim("Adds AIP package, control adapter, and activity integration"))
     print("")
     aip_choice = _prompt("Enable aip_core? [y/N]:", "(default: N)")
     aip_core = aip_choice.lower() in ("y", "yes")
@@ -414,7 +414,7 @@ def interactive_mode():
             return
 
         def _gen():
-            AgentGenerator(cfg).generate_agent(agent_cfg, output)
+            AgentGenerator(cfg).generate_standalone(agent_cfg, output)
             return "%s/%s_agent/" % (output, name)
         path = _spinner("Generating agent...", _gen)
         _success_card("Agent Generated", [

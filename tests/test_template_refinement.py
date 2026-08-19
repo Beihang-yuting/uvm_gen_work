@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,33 @@ def generate(tmp_path: Path, platform_type: PlatformType, aip_core: bool) -> Pat
         output_dir=str(tmp_path),
     )
     return Path(PlatformGenerator(config).generate())
+
+
+def generate_standalone(
+    tmp_path: Path, platform_type: PlatformType, aip_core: bool
+) -> Path:
+    command = [
+        sys.executable,
+        "-m",
+        "uvm_gen.cli",
+        "-a",
+        "axi",
+        "-t",
+        platform_type.value,
+        "-o",
+        str(tmp_path),
+    ]
+    if aip_core:
+        command.append("--aip-core")
+    completed = subprocess.run(
+        command,
+        cwd=REPOSITORY,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    return tmp_path / "axi_agent"
 
 
 def read(project: Path, relative_path: str) -> str:
@@ -193,10 +221,11 @@ def assert_task6_filelist_contract(
         f"../env/{block_name}_checker.sv",
         f"../env/{block_name}_env_cfg.sv",
         block_env,
+        "+incdir+../th/bind",
         harness,
     ]
     assert env_lines == expected_env_lines
-    assert env_lines[-2:] == [block_env, harness]
+    assert env_lines[-3:] == [block_env, "+incdir+../th/bind", harness]
     assert env_lines.count(block_env) == 1
     assert env_lines.count(harness) == 1
     assert len(env_lines) == len(set(env_lines))
@@ -370,7 +399,7 @@ foreach (expected_q[i])
         "`th/harness.sv` is the final active source in `cfg/env.f`"
         in helper_text
     )
-    assert "`th/bind/bind_example.sv` line follows it" in helper_text
+    assert "`th/bind/bind_example.sv` line follows the harness" in helper_text
     assert "commented out" in helper_text
     assert "disabled by default" in helper_text
 
@@ -383,6 +412,10 @@ foreach (expected_q[i])
     assert "once per completed transaction or accepted beat" in aip_text
     assert "never once per clock" in aip_text
     assert "`end_test timeout`" in aip_text
+    assert "all AIP activity shares one counter" in aip_text
+    assert "unrelated monitor traffic" in aip_text
+    assert "keep the `end_test` idle wait" in aip_text
+    assert "a stalled AIP command watchdog alive" in aip_text
 
     for removed in (
         "common_uvm_scb_legacy",
@@ -460,6 +493,8 @@ def test_bind_examples_are_generated_but_disabled(tmp_path, platform_type):
     bind_example = read(project, "th/bind/bind_example.sv")
     common_sva = read(project, "th/bind/common_sva.svh")
 
+    assert '`include "common_sva.svh"' in bind_example
+    assert "../th/bind/common_sva.svh" not in bind_example
     assert "UVG_SVA_NO_X" in common_sva
     assert "UVG_SVA_HOLD" in common_sva
     for phrase in (
@@ -509,29 +544,161 @@ endmodule
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_disabled_bind_example_compiles_with_sva_macros(tmp_path):
-    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+def test_optional_bind_compiles_from_root_and_cfg_flows(
+    tmp_path, platform_type
+):
+    project = generate(tmp_path, platform_type, aip_core=False)
     common_sva = read(project, "th/bind/common_sva.svh")
     assert 'else $error("%s contains X/Z", `"SIGNAL`");' in common_sva
     assert 'else $error("%s changed while stalled", `"PAYLOAD`");' in common_sva
 
-    completed = subprocess.run(
-        [
-            require_iverilog(),
-            "-g2012",
-            "-gno-assertions",
-            "-s",
-            "uvg_bind_checker",
-            "-o",
-            str(project / "bind_example.vvp"),
-            "../th/bind/bind_example.sv",
-        ],
-        cwd=project / "cfg",
-        check=False,
-        capture_output=True,
-        text=True,
+    env_path = project / "cfg/env.f"
+    enabled_env = env_path.read_text(encoding="utf-8").replace(
+        "# ../th/bind/bind_example.sv",
+        "../th/bind/bind_example.sv",
+        1,
     )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    env_path.write_text(enabled_env, encoding="utf-8")
+    enabled_lines = active_filelist_lines(enabled_env)
+    assert enabled_lines[-3:] == [
+        "+incdir+../th/bind",
+        "../th/harness.sv",
+        "../th/bind/bind_example.sv",
+    ]
+
+    flows = (
+        (project, "th/bind", "th/bind/bind_example.sv", "root"),
+        (project / "cfg", "../th/bind", "../th/bind/bind_example.sv", "cfg"),
+    )
+    for cwd, include_dir, source, label in flows:
+        completed = subprocess.run(
+            [
+                require_iverilog(),
+                "-g2012",
+                "-gno-assertions",
+                "-I",
+                include_dir,
+                "-s",
+                "uvg_bind_checker",
+                "-o",
+                str(project / f"bind_example_{label}.vvp"),
+                source,
+            ],
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_standalone_cli_generates_complete_compilation_tree(
+    tmp_path, platform_type, aip_core
+):
+    project = generate_standalone(tmp_path, platform_type, aip_core)
+    tb_lines = active_filelist_lines(read(project, "test_env/cfg/tb.f"))
+    env_lines = active_filelist_lines(read(project, "test_env/cfg/env.f"))
+    expected_tb = [
+        "-F ./env.f",
+        "+incdir+../",
+        "../axi_test_env_cfg.sv",
+        "../axi_test_env.sv",
+        "../axi_base_test.sv",
+        "../axi_test_harness.sv",
+    ]
+    if aip_core:
+        expected_tb[:0] = [
+            "+incdir+$AIP_HOME/aip_core",
+            "$AIP_HOME/aip_core/aip_core_pkg.sv",
+        ]
+    assert tb_lines == expected_tb
+    assert env_lines == [
+        "-F ../../common/common_lib_pkg.f",
+        "-F ../../axi_agent.f",
+    ]
+
+    common_filelist = read(project, "common/common_lib_pkg.f")
+    assert ("./common_scb_aip_adapter.sv" in common_filelist) is aip_core
+    assert (project / "common/common_scb_registry.sv").exists() is aip_core
+    assert (project / "common/common_scb_aip_adapter.sv").exists() is aip_core
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(project.rglob("*"))
+        if path.is_file()
+    )
+    assert "AIP_CORE_HOME" not in combined
+    assert ("$AIP_HOME/aip_core" in combined) is aip_core
+    assert "aip_activity_subscriber" not in combined
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_embedded_agent_test_env_reuses_platform_common_tree(
+    tmp_path, platform_type, aip_core
+):
+    project = generate(tmp_path, platform_type, aip_core)
+    test_env = project / "env/agents/axi_agent/test_env"
+    tb_lines = active_filelist_lines(
+        (test_env / "cfg/tb.f").read_text(encoding="utf-8")
+    )
+    env_lines = active_filelist_lines(
+        (test_env / "cfg/env.f").read_text(encoding="utf-8")
+    )
+    assert tb_lines[(-6):] == [
+        "-F ./env.f",
+        "+incdir+../",
+        "../axi_test_env_cfg.sv",
+        "../axi_test_env.sv",
+        "../axi_base_test.sv",
+        "../axi_test_harness.sv",
+    ]
+    assert env_lines == [
+        "-F ../../../../../common/common_lib_pkg.f",
+        "-F ../../axi_agent.f",
+    ]
+    common_target = (test_env / "cfg/../../../../../common").resolve()
+    assert common_target == (project / "common").resolve()
+    assert ("$AIP_HOME/aip_core/aip_core_pkg.sv" in tb_lines) is aip_core
+    assert not list(project.glob("env/agents/*_agent/common"))
+
+
+def test_standalone_harness_uses_public_vif_contract(
+    tmp_path, platform_type
+):
+    project = generate_standalone(tmp_path, platform_type, aip_core=False)
+    harness = read(project, "test_env/axi_test_harness.sv")
+    generated_sv = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(project.rglob("*.sv"))
+    )
+
+    assert "`UVG_VIF_SET(axi_if," in harness
+    assert '"uvm_test_top.m_env.m_axi_agt*"' in harness
+    assert '"m_axi_if"' not in harness
+    assert "uvm_config_db#(virtual axi_if)::set" not in harness
+    assert generated_sv.count("`UVG_VIF_GET(axi_if, m_vif)") == 1
+
+
+def test_standalone_vcs_matrix_runner_covers_public_cli_and_root_filelist():
+    runner = REPOSITORY / "tests/vcs/run_standalone_agent_matrix.sh"
+    assert runner.exists()
+    assert os.access(runner, os.X_OK)
+    source = runner.read_text(encoding="utf-8")
+    assert "set -euo pipefail" in source
+    assert "python3 -m uvm_gen.cli" in source
+    assert "-a axi" in source
+    assert "-t \"${platform_type}\"" in source
+    assert "--aip-core" in source
+    assert "-F test_env/cfg/tb.f" in source
+    for label in ("advance_off", "advance_on", "port_off", "port_on"):
+        assert label in source
+    assert "STANDALONE_AGENT_VCS_MATRIX_PASS" in source
+
+
+def test_interactive_cli_describes_current_aip_integration():
+    cli_source = (REPOSITORY / "uvm_gen/cli.py").read_text(encoding="utf-8")
+    assert "activity subscriber" not in cli_source
+    assert "Adds AIP package, control adapter, and activity integration" in cli_source
 
 
 @pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
@@ -1212,6 +1379,17 @@ def test_template_refinement_vcs_assets_cover_semantics():
     ):
         assert token in script
 
+    root_bind_leg = script[
+        script.index("root_bind_env_file=") :
+        script.index('cd "${run_dir}/cfg"')
+    ]
+    assert 'sed -i' in root_bind_leg
+    assert '# ../th/bind/bind_example.sv' in root_bind_leg
+    assert 'cd "${run_dir}"' in root_bind_leg
+    assert "run_vcs_compile root_bind" in root_bind_leg
+    assert "-F cfg/tb.f" in root_bind_leg
+    assert "-top harness" in root_bind_leg
+
     width_leg = script[
         script.index("set +e\n") :
         script.index("bad_width_status=$?")
@@ -1283,6 +1461,13 @@ def run_synthetic_template_refinement_gate(
     cfg = project / "cfg"
     cfg.mkdir(parents=True)
     (cfg / "tb.f").write_text("# synthetic filelist\n", encoding="utf-8")
+    (cfg / "env.f").write_text(
+        "+incdir+../th/bind\n"
+        "../th/harness.sv\n"
+        "# Optional bind checks compile after the harness:\n"
+        "# ../th/bind/bind_example.sv\n",
+        encoding="utf-8",
+    )
     (cfg / "wave.tcl").write_text(
         'fsdbDumpfile "wave.fsdb"\n'
         'fsdbDumpvars 0 "harness"\n'
@@ -1551,6 +1736,13 @@ def test_template_refinement_vcs_gate_rejects_stale_native_fsdb(tmp_path):
     cfg = project / "cfg"
     cfg.mkdir(parents=True)
     (cfg / "tb.f").write_text("# synthetic filelist\n", encoding="utf-8")
+    (cfg / "env.f").write_text(
+        "+incdir+../th/bind\n"
+        "../th/harness.sv\n"
+        "# Optional bind checks compile after the harness:\n"
+        "# ../th/bind/bind_example.sv\n",
+        encoding="utf-8",
+    )
     (cfg / "wave.tcl").write_text(
         'fsdbDumpfile "wave.fsdb"\n'
         'fsdbDumpvars 0 "harness"\n'

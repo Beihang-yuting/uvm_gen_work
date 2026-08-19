@@ -34,7 +34,9 @@ module {{ name }}_test_harness;
     // );
 
     initial begin
-        uvm_config_db#(virtual {{ name }}_if)::set(null, "*", "m_{{ name }}_if", m_{{ name }}_if);
+        `UVG_VIF_SET({{ name }}_if,
+                     "uvm_test_top.m_env.m_{{ name }}_agt*",
+                     m_{{ name }}_if);
         run_test();
     end
 
