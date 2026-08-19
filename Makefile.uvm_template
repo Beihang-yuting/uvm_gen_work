@@ -60,8 +60,7 @@ VCS_OPTS := -full64 -sverilog \
             -kdb \
             -lca \
             +define+UVM_NO_DEPRECATED \
-            +incdir+./common +incdir+./env +incdir+./tc +incdir+./th \
-            -f $(DUT_F) -f $(ENV_F) -f $(TB_F) \
+            -f $(TB_F) \
             -Mdir=$(BUILD_DIR)/csrc \
             -o $(SIMV) \
             -l $(CMP_LOG)
@@ -81,7 +80,7 @@ SIMV_OPTS := +UVM_TESTNAME=$(TEST) \
              -l $(RUN_LOG)
 
 ifeq ($(WAVE),fsdb)
-SIMV_OPTS += -ucli -do ../../../$(WAVE_TCL)
+SIMV_OPTS += -ucli -i ../../../$(WAVE_TCL)
 WAVE_OUT  := $(WAVE_DIR)/$(RUN_NAME).fsdb
 endif
 ifeq ($(WAVE),vpd)

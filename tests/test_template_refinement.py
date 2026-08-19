@@ -443,3 +443,61 @@ def test_interface_separates_master_slave_and_monitor_clocking(
     assert "m_vif.drv_cb" not in driver
     assert "m_vif.mst_drv_cb" in driver
     assert "m_vif.slv_drv_cb" in driver
+
+
+def test_filelist_places_harness_last_in_env_only(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type, aip_core=True)
+    env_lines = active_filelist_lines(read(project, "cfg/env.f"))
+    tb_lines = active_filelist_lines(read(project, "cfg/tb.f"))
+
+    assert env_lines[-1] == "../th/harness.sv"
+    assert tb_lines == [
+        "+incdir+$AIP_HOME/aip_core",
+        "$AIP_HOME/aip_core/aip_core_pkg.sv",
+        "-F   ./dut.f",
+        "-F   ./env.f",
+        "-F   ../tc/tc.f",
+    ]
+    assert not any("harness.sv" in line for line in tb_lines)
+
+
+def test_cfg_examples_use_reviewed_vcs_syntax(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type, aip_core=False)
+    xprop = read(project, "cfg/xprop.cfg")
+    initreg = read(project, "cfg/initreg.cfg")
+    coverage = read(project, "cfg/coverage.cfg")
+    wave = read(project, "cfg/wave.tcl")
+
+    assert "merge = tmerge;" in xprop
+    assert "tree {harness} {xpropOn};" in xprop
+    assert "xpropMode" not in xprop
+
+    assert "+vcs+initreg+random" in initreg
+    assert not re.search(r"(?<!\+vcs)\+initreg\+", initreg)
+
+    active_coverage = active_filelist_lines(coverage)
+    assert "-cm_cond obsv" not in coverage
+    assert not any(
+        re.match(r"^[+-]tree\s+harness\.u_dut(?:\s|$)", line)
+        for line in active_coverage
+    )
+
+    assert 'fsdbDumpvars 0 "harness"' in wave
+    assert 'fsdbDumpvars 0 "tb"' not in wave
+    assert "\ufffd" not in wave
+
+
+def test_makefile_uses_tb_filelist_and_ucli_input_script():
+    makefile = (REPOSITORY / "Makefile.uvm_template").read_text(
+        encoding="utf-8"
+    )
+    vcs_opts = re.search(
+        r"(?ms)^VCS_OPTS\s*:=\s*(?P<body>.*?)(?=^ifeq\b)", makefile
+    )
+
+    assert vcs_opts is not None
+    assert vcs_opts.group("body").count("-f $(TB_F)") == 1
+    assert "-f $(DUT_F)" not in vcs_opts.group("body")
+    assert "-f $(ENV_F)" not in vcs_opts.group("body")
+    assert "-ucli -i ../../../$(WAVE_TCL)" in makefile
+    assert "-ucli -do" not in makefile
