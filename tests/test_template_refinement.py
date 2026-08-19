@@ -309,6 +309,33 @@ OBSOLETE_COMMON = {
 }
 
 
+def test_readme_describes_final_platform_contract():
+    readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+    for required in (
+        "Advance task-only",
+        "PORT TLM/FIFO",
+        "get_mon_item",
+        "predict_axi",
+        "send_axi_actual",
+        "send_axi_expected",
+        "AGENT_ONLY_MONITOR",
+        "UVG_IF_CONNECT",
+        "th/bind/bind_example.sv",
+        "$AIP_HOME/aip_core",
+        "+SCB_REPORT_LIMIT=-1",
+    ):
+        assert required in readme
+    for removed in (
+        "common_uvm_scb_legacy",
+        "aip_activity_subscriber",
+        "common_report_server",
+        "AIP_CORE_HOME",
+        "AGENT_ONLY_MASTER",
+        "AGENT_ONLY_SLAVE",
+    ):
+        assert removed not in readme
+
+
 @pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
 def test_common_layout_is_minimal(tmp_path, platform_type, aip_core):
     project = generate(tmp_path, platform_type, aip_core=aip_core)

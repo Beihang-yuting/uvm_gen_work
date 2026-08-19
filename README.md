@@ -100,7 +100,7 @@ gen_tb                                                          # interactive
 |---|---|
 | `-b, --block`   | Block name (required for platform mode) |
 | `-a, --agent`   | Agent name(s), comma-separated (e.g. `"axi,apb,pcie"`) |
-| `-t, --type`    | Platform type: `advance` (default, self-contained, FIFO in agent) or `port` (standard UVM, FIFO in env) |
+| `-t, --type`    | Platform type: `advance` (default, task-only routing at env level) or `port` (environment-owned TLM/FIFO routing) |
 | `-f, --config`  | YAML configuration file |
 | `-o, --output`  | Output directory (default: current directory) |
 | `--aip-core`    | Enable aip_core integration (TCL bridge, aip_log, aip_clk) |
@@ -138,13 +138,17 @@ For `gen_tb -b mytop -a "axi,apb"`:
 
 ```
 mytop/
-├── common/                # common_lib_pkg.sv + report_server + scbs
+├── common/                # scoreboard, macros, assertions, and package
 ├── env/                   # env.sv, env_cfg.sv, rm.sv, checker.sv, vsqr.sv, sys_if.sv
 │   ├── ral/               # placeholder for register model
 │   └── agents/
 │       ├── axi_agent/{src/*.sv, axi_agent.f, test_env/...}
 │       └── apb_agent/{...}
-├── th/                    # harness.sv
+├── th/
+│   ├── harness.sv
+│   └── bind/
+│       ├── bind_example.sv
+│       └── common_sva.svh
 ├── tc/                    # tc_base.sv, tc.f (+ tc_tcl.sv when --aip-core)
 ├── cfg/                   # dut.f, env.f, tb.f, initreg.cfg, xprop.cfg, coverage.cfg, wave.tcl
 └── doc/                   # placeholder
@@ -154,13 +158,53 @@ mytop/
 
 ## Platform Types
 
-| Type      | Description |
-|-----------|-------------|
-| `advance` | Self-contained agents (FIFO inside each agent), faster bring-up. |
-| `port`    | Standard UVM topology (FIFO inside env), aligns with most UVM training material. |
+Both templates generate the same major directories and support exactly three
+agent modes: `AGENT_MASTER`, `AGENT_SLAVE`, and `AGENT_ONLY_MONITOR`. There are
+no separate no-monitor variants; an active master or slave always includes its
+monitor.
 
-Same set of generated files; only template internals differ. Selected via
-`-t advance` (default) or `-t port`.
+### Advance task-only routing
+
+Advance keeps one monitor FIFO inside each agent. The environment does not add
+transaction analysis connections or automatically connect the agent, reference
+model, and checker. User code explicitly consumes the single agent stream and
+calls the typed task APIs:
+
+```systemverilog
+m_env.m_axi_agt.get_mon_item(observed);
+m_env.m_rm.predict_axi(observed, expected_q);
+m_env.m_scb.send_axi_actual(observed);
+foreach (expected_q[i])
+    m_env.m_scb.send_axi_expected(expected_q[i]);
+```
+
+Use `try_get_mon_item()` when polling is preferable to the blocking
+`get_mon_item()` call. The agent-local FIFO has one external consumer; do not
+start competing consumers for the same monitor stream.
+
+### PORT TLM/FIFO routing
+
+PORT keeps conventional environment-owned TLM/FIFO wiring. The environment
+connects monitor output to the reference model and checker, connects predicted
+output to the checker, and owns reset-time worker stop, FIFO flush, scoreboard
+reset, and restart. No task-only routing loop is needed for this template.
+
+Select the template with `-t advance` (default) or `-t port`.
+
+## Transactions and comparison
+
+Generated transactions register with `uvm_object_utils` and explicitly provide
+`do_copy`, `do_compare`, `convert2string`, and `do_print`. Add every protocol
+field to those methods. The generated typed comparison is deliberately
+fail-safe: it returns a mismatch with `comparison not implemented` until the
+user implements protocol-field comparison, so an empty transaction cannot
+silently pass.
+
+The default scoreboard has one stream in `SCB_UNORDERED` mode. It does not
+invent an ID or tag. `get_scb_stream_id()` initially routes every transaction
+to the same stream and `get_scb_kind()` returns the default comparison kind;
+override them only when the protocol itself provides meaningful routing or
+comparison semantics.
 
 ---
 
@@ -169,8 +213,7 @@ Same set of generated files; only template internals differ. Selected via
 Each generated checker owns one explicitly typed
 `common_uvm_scb#(<agent>_trans)` instance per agent. Generated transactions
 provide virtual `get_scb_stream_id()` and `get_scb_kind()` methods, which
-default to `'1` and `-1`; override them to route protocol traffic into the
-appropriate stream and comparison kind.
+default to `'1` and `-1`.
 
 The scoreboard supports ordered exact, ordered with DUT loss, and unordered
 comparison. Its core `push_expected()` and `push_actual()` input APIs are
@@ -184,7 +227,8 @@ The final report always prints aggregate totals and, by default, up to the top 1
 problem streams. Normal streams are omitted. `+SCB_REPORT_LIMIT=0` prints the
 summary only, `+SCB_REPORT_LIMIT=-1` prints every problem stream, and a finite
 non-negative value prints up to that many top rows. The report always states the
-number of omitted problem streams. Invalid values produce a warning and leave
+number of omitted problem streams; the full unmatched list is off by default.
+Invalid values produce a warning and leave
 the configured or default limit in effect. Reporting is console summary/table
 output; it does not create a full CSV or text dump. Runtime mismatch detail has
 its own `m_err_limit`, followed by a suppression summary when messages exceed
@@ -192,9 +236,8 @@ that limit.
 
 `reset_state(0)` clears live stream queues and state while retaining cumulative
 diagnostics and counters; `reset_state(1)` also clears counter and diagnostic
-history. Generated reset hooks invoke the scoreboard reset as part of the
-platform reset lifecycle. The previous implementation remains available as
-`common_uvm_scb_legacy`.
+history. Generated PORT reset hooks invoke the scoreboard reset as part of the
+environment-owned reset lifecycle.
 
 With `--aip-core`, exactly four scoreboard commands provide non-destructive
 inspection and report-limit control:
@@ -210,13 +253,58 @@ There is no scoreboard reset or clear command in the AIP adapter.
 
 ---
 
+## Interface and harness helpers
+
+Use the connection macro once per protocol signal:
+
+```systemverilog
+`UVG_IF_CONNECT(ROLE, FLOW, RTL_SIG, VIF_SIG)
+```
+
+The argument order is always RTL before VIF. `ROLE` is `MASTER`, `SLAVE`, or
+`MONITOR`; `FLOW` is `M2S` or `S2M` and describes the protocol direction.
+Master drives M2S and samples S2M, slave samples M2S and drives S2M, while a
+monitor samples both. Each expansion includes a width check. The common package
+also provides `UVG_VIF_SET`, `UVG_VIF_GET`, `UVG_CLK`, `UVG_RSTN`, and
+`UVG_STATIC_ASSERT`; `UVG_SVA_NO_X` and `UVG_SVA_HOLD` are available from the
+generated bind helper.
+
+`th/harness.sv` is the final active source in `cfg/env.f`. The optional
+`th/bind/bind_example.sv` line follows it but is commented out, so bind checks
+are disabled by default. Uncomment that line and define or edit the examples in
+`th/bind/bind_example.sv` when the DUT hierarchy is known.
+
 ## aip_core Integration
 
-Use `--aip-core` (CLI) or `aip_core: true` (YAML) to add:
+Use `--aip-core` (CLI) or `aip_core: true` (YAML). `AIP_HOME` is the parent
+installation directory and `aip_core` is its child. The sole supported layout
+is `$AIP_HOME/aip_core`; generated `cfg/tb.f` uses exactly:
 
-- `common/aip_activity_subscriber.sv` — activity subscriber stub
-- `tc/tc_tcl.sv` + `tc/tcl/tc_tcl_demo.tcl` — TCL bridge harness
-- Wiring inside generated cfg/env headers for `aip_log` / `aip_clk`
+```text
++incdir+$AIP_HOME/aip_core
+$AIP_HOME/aip_core/aip_core_pkg.sv
+```
+
+The generated TCL demo loads:
+
+```tcl
+source $env(AIP_HOME)/aip_core/aip_cmd.tcl
+```
+
+Generated base-sequence helpers call `aip_activity::tick()` only after real
+completion boundaries. `send_trans_with_rsp()` ticks after request completion
+and again after response completion. If monitor-observed bus or C-driven
+traffic must extend the AIP idle window, enable the commented monitor tick once
+per completed transaction or accepted beat, never once per clock. The AIP
+`end_test timeout` remains the safeguard for a source that never becomes idle.
+
+## Optional VCS Makefile
+
+`Makefile.uvm_template` can be copied to a generated project root. Its compile
+path uses one uppercase `-F cfg/tb.f`, allowing the nested filelists to resolve
+relative to their containing directories. Wave dumping defaults to
+`WAVE=none`; FSDB is opt-in with `WAVE=fsdb` and performs a `VERDI_HOME`/PLI
+preflight before compilation.
 
 ---
 
