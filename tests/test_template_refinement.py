@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -54,6 +56,13 @@ def active_filelist_lines(source: str) -> list[str]:
         for line in source.splitlines()
         if line.strip() and not line.lstrip().startswith(("#", "//"))
     ]
+
+
+def require_iverilog() -> str:
+    executable = shutil.which("iverilog")
+    if executable is None:
+        pytest.skip("iverilog is unavailable; skipping compile-only regression")
+    return executable
 
 
 OBSOLETE_COMMON = {
@@ -143,3 +152,59 @@ def test_bind_examples_are_generated_but_disabled(tmp_path, platform_type):
     assert not any(
         "../th/bind/bind_example.sv" in line for line in active_env_lines
     )
+
+
+def test_static_assert_macro_expands_to_valid_systemverilog(tmp_path):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    probe = project / "static_assert_probe.sv"
+    probe.write_text(
+        """\
+`include "common/common_dec.sv"
+module static_assert_probe;
+    `UVG_STATIC_ASSERT(valid_static_assert, 1, "valid expression")
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            require_iverilog(),
+            "-g2012",
+            "-s",
+            "static_assert_probe",
+            "-o",
+            str(project / "static_assert_probe.vvp"),
+            probe.name,
+        ],
+        cwd=project,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_disabled_bind_example_compiles_with_sva_macros(tmp_path):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    common_sva = read(project, "th/bind/common_sva.svh")
+    assert 'else $error("%s contains X/Z", `"SIGNAL`");' in common_sva
+    assert 'else $error("%s changed while stalled", `"PAYLOAD`");' in common_sva
+
+    completed = subprocess.run(
+        [
+            require_iverilog(),
+            "-g2012",
+            "-gno-assertions",
+            "-s",
+            "uvg_bind_checker",
+            "-o",
+            str(project / "bind_example.vvp"),
+            "../th/bind/bind_example.sv",
+        ],
+        cwd=project / "cfg",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr

@@ -5,7 +5,7 @@
 
 `define UVG_STATIC_ASSERT(NAME, EXPR, MESSAGE) \
     if (!(EXPR)) begin : NAME \
-        UVG_STATIC_ASSERTION_FAILED #(.MESSAGE(MESSAGE)) \
+        UVG_STATIC_ASSERTION_FAILED #(MESSAGE) \
             u_uvg_static_assertion_failed(); \
     end
 
