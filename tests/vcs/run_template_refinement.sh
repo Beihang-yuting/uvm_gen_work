@@ -181,7 +181,7 @@ require_clean_uvm_summary run_template.log
 
 set +e
 timeout --kill-after=30s 600s vcs \
-    -full64 -sverilog -ntb_opts uvm-1.2 \
+    -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
     +define+UVG_WIDTH_MISMATCH \
     -F ../common/common_lib_pkg.f \
     -F ../env/agents/axi_agent/axi_agent.f \
@@ -220,8 +220,33 @@ if grep -Fq TEMPLATE_REFINEMENT_VCS_PASS \
     exit 1
 fi
 
+fsdb_native=false
+fsdb_compile_options=()
+fsdb_roots=()
+if [[ -n ${VERDI_HOME:-} ]]; then
+    fsdb_roots+=("${VERDI_HOME}")
+fi
+if [[ -n ${NOVAS_HOME:-} ]]; then
+    fsdb_roots+=("${NOVAS_HOME}")
+fi
+if verdi_bin=$(command -v verdi 2>/dev/null); then
+    verdi_bin=$(realpath -- "${verdi_bin}")
+    fsdb_roots+=("$(cd "$(dirname "${verdi_bin}")/.." && pwd)")
+fi
+for fsdb_root in "${fsdb_roots[@]}"; do
+    fsdb_pli_dir="${fsdb_root}/share/PLI/VCS/LINUX64"
+    if [[ -r ${fsdb_pli_dir}/novas.tab && -r ${fsdb_pli_dir}/pli.a ]]; then
+        fsdb_compile_options=(
+            -P "${fsdb_pli_dir}/novas.tab" "${fsdb_pli_dir}/pli.a"
+        )
+        fsdb_native=true
+        break
+    fi
+done
+
 run_vcs_compile xprop \
-    -full64 -sverilog -ntb_opts uvm-1.2 -debug_access+all -lca \
+    -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
+    -debug_access+all -lca "${fsdb_compile_options[@]}" \
     -f tb.f -xprop=xprop.cfg -top harness -o simv_xprop
 run_vcs_compile initreg \
     -full64 -sverilog -ntb_opts uvm-1.2 \
@@ -235,26 +260,31 @@ run_vcs_compile coverage \
 # when available.  A host without Verdi/FSDB support takes an explicit,
 # observable compatibility path which validates both calls without claiming
 # that an FSDB database was produced.
-mv -- wave.tcl wave.generated.tcl
-cat >wave.tcl <<'TCL'
-if {[llength [info commands fsdbDumpfile]] == 0 ||
-    [llength [info commands fsdbDumpvars]] == 0} {
-    puts "TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable"
-    proc fsdbDumpfile {file_name} {
-        if {$file_name ne "wave.fsdb"} {
-            error "unexpected FSDB output: $file_name"
-        }
-        puts "TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpfile wave.fsdb"
+if [[ ${fsdb_native} == false ]]; then
+    mv -- wave.tcl wave.generated.tcl
+    cat >wave.tcl <<'TCL'
+puts "TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable"
+if {[llength [info commands fsdbDumpfile]] != 0} {
+    rename fsdbDumpfile {}
+}
+if {[llength [info commands fsdbDumpvars]] != 0} {
+    rename fsdbDumpvars {}
+}
+proc fsdbDumpfile {file_name} {
+    if {$file_name ne "wave.fsdb"} {
+        error "unexpected FSDB output: $file_name"
     }
-    proc fsdbDumpvars {depth scope} {
-        if {$depth != 0 || $scope ne "harness"} {
-            error "unexpected FSDB scope: depth=$depth scope=$scope"
-        }
-        puts "TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpvars 0 harness"
+    puts "TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpfile wave.fsdb"
+}
+proc fsdbDumpvars {depth scope} {
+    if {$depth != 0 || $scope ne "harness"} {
+        error "unexpected FSDB scope: depth=$depth scope=$scope"
     }
+    puts "TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpvars 0 harness"
 }
 source wave.generated.tcl
 TCL
+fi
 
 timeout --kill-after=10s 90s \
     ./simv_xprop +UVM_TESTNAME=tc_base -ucli -i wave.tcl \
@@ -262,8 +292,13 @@ timeout --kill-after=10s 90s \
 reject_bad_log run_wave.log
 reject_bad_log run_wave_console.log
 require_clean_tc_pass run_wave.log
-if grep -Fq 'TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable' \
-        run_wave.log run_wave_console.log; then
+if [[ ${fsdb_native} == false ]]; then
+    if [[ $(grep -Fxc \
+            'TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable' \
+            run_wave.log || true) -ne 1 ]]; then
+        fail 'portable wave leg did not report unavailable native FSDB support'
+        exit 1
+    fi
     if [[ $(grep -Fxc \
             'TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpfile wave.fsdb' \
             run_wave.log || true) \
@@ -275,9 +310,20 @@ if grep -Fq 'TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable' \
         fail 'portable wave leg did not execute both generated FSDB calls once'
         exit 1
     fi
-elif [[ ! -s wave.fsdb ]]; then
-    fail 'native FSDB commands were present but no wave.fsdb was produced'
-    exit 1
+    if [[ -e wave.fsdb ]]; then
+        fail 'portable wave leg unexpectedly claimed a native FSDB database'
+        exit 1
+    fi
+else
+    if grep -Fq 'TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable' \
+            run_wave.log run_wave_console.log; then
+        fail 'native FSDB leg unexpectedly used the portable path'
+        exit 1
+    fi
+    if [[ ! -s wave.fsdb ]]; then
+        fail 'native FSDB PLI was loaded but no wave.fsdb was produced'
+        exit 1
+    fi
 fi
 
 echo TEMPLATE_REFINEMENT_VCS_GATE_PASS

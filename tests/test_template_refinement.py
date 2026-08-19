@@ -1125,3 +1125,27 @@ def test_template_refinement_vcs_assets_cover_semantics():
         "TEMPLATE_REFINEMENT_VCS_PASS",
     ):
         assert token in script
+
+    width_leg = script[
+        script.index("set +e\n") :
+        script.index("bad_width_status=$?")
+    ]
+    assert "+define+UVG_WIDTH_MISMATCH" in width_leg
+    assert "-timescale=1ns/1ps" in width_leg
+    for fsdb_contract in (
+        "novas.tab",
+        "pli.a",
+        "fsdb_compile_options",
+        "TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable",
+        "rename fsdbDumpfile {}",
+        "rename fsdbDumpvars {}",
+    ):
+        assert fsdb_contract in script
+    xprop_compile = script[
+        script.index("run_vcs_compile xprop") :
+        script.index("run_vcs_compile initreg")
+    ]
+    assert "-timescale=1ns/1ps" in xprop_compile
+    assert '"${fsdb_compile_options[@]}"' in xprop_compile
+    wave_run = script[script.index("-ucli -i wave.tcl") - 160 :]
+    assert "./simv_xprop +UVM_TESTNAME=tc_base" in wave_run
