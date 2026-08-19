@@ -50,6 +50,16 @@ def function_body(source: str, name: str) -> str:
     return match.group("body")
 
 
+def task_body(source: str, name: str) -> str:
+    match = re.search(
+        rf"(?ms)^[ \t]*(?:virtual[ \t]+)?task\b[^;]*\b{name}\b"
+        rf"[^;]*;(?P<body>.*?)^[ \t]*endtask\b",
+        source,
+    )
+    assert match, f"missing task {name}"
+    return match.group("body")
+
+
 def active_filelist_lines(source: str) -> list[str]:
     return [
         line.rstrip()
@@ -277,17 +287,8 @@ def test_agent_modes_and_vif_ownership_are_standardized(
     assert "monitor-only mode has no driver" in driver_case.group("body")
 
 
-@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
-def test_advance_uses_task_only_transaction_routing(tmp_path, aip_core):
-    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=aip_core)
-    agent = read(project, "env/agents/axi_agent/src/axi_agent.sv")
-    sequencer = read(project, "env/agents/axi_agent/src/axi_sqr.sv")
-    base_sequence = read(project, "env/agents/axi_agent/src/axi_base_seq.sv")
-    rm = read(project, "env/top_rm.sv")
-    checker = read(project, "env/top_checker.sv")
-    env = read(project, "env/top_env.sv")
-    active_env = strip_sv_comments(env)
-
+def assert_advance_agent_monitor_fifo_contract(agent_raw: str) -> None:
+    agent = strip_sv_comments(agent_raw)
     assert "task axi_agent::get_mon_item" in agent
     assert "function bit axi_agent::try_get_mon_item" in agent
     assert (
@@ -298,6 +299,38 @@ def test_advance_uses_task_only_transaction_routing(tmp_path, aip_core):
         )
         == 1
     )
+    assert re.search(
+        r'(?m)^[ \t]*m_mon_fifo\s*=\s*new\s*\(\s*"m_mon_fifo"\s*,\s*'
+        r"this\s*\)\s*;",
+        agent,
+    ), "Advance agent must construct its monitor FIFO"
+    assert re.search(
+        r"(?m)^[ \t]*m_mon\s*\.\s*m_ap\s*\.\s*connect\s*\(\s*"
+        r"m_mon_fifo\s*\.\s*analysis_export\s*\)\s*;",
+        agent,
+    ), "Advance monitor must feed the agent-local FIFO"
+    assert re.search(
+        r"\bm_mon_fifo\s*\.\s*get\s*\(\s*tr\s*\)\s*;",
+        task_body(agent, "get_mon_item"),
+    ), "get_mon_item must block on the agent-local FIFO"
+    assert re.search(
+        r"\breturn\s+m_mon_fifo\s*\.\s*try_get\s*\(\s*tr\s*\)\s*;",
+        function_body(agent, "try_get_mon_item"),
+    ), "try_get_mon_item must return the FIFO nonblocking result"
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_advance_uses_only_explicit_transaction_tasks(tmp_path, aip_core):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=aip_core)
+    agent = read(project, "env/agents/axi_agent/src/axi_agent.sv")
+    sequencer = read(project, "env/agents/axi_agent/src/axi_sqr.sv")
+    base_sequence = read(project, "env/agents/axi_agent/src/axi_base_seq.sv")
+    rm = read(project, "env/top_rm.sv")
+    checker = read(project, "env/top_checker.sv")
+    env = read(project, "env/top_env.sv")
+    active_env = strip_sv_comments(env)
+
+    assert_advance_agent_monitor_fifo_contract(agent)
     assert "only one external consumer" in agent
     for obsolete_fifo in ("m_req_fifo", "m_rsp_fifo"):
         assert obsolete_fifo not in agent + sequencer
@@ -315,6 +348,34 @@ def test_advance_uses_task_only_transaction_routing(tmp_path, aip_core):
         "Flow: get_mon_item -> predict_axi -> "
         "send_axi_actual/send_axi_expected"
     ) in env
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        (
+            'm_mon_fifo = new("m_mon_fifo", this);',
+            'm_mon_fifo = null;',
+        ),
+        (
+            "m_mon.m_ap.connect(m_mon_fifo.analysis_export);",
+            "m_mon.m_ap.connect(m_other_fifo.analysis_export);",
+        ),
+        ("m_mon_fifo.get(tr);", "m_mon_fifo.peek(tr);"),
+        ("return m_mon_fifo.try_get(tr);", "return 1'b0;"),
+    ],
+    ids=["construction", "connection", "blocking_get", "nonblocking_get"],
+)
+def test_advance_monitor_fifo_contract_rejects_broken_behavior(
+    tmp_path, needle, replacement
+):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    agent = read(project, "env/agents/axi_agent/src/axi_agent.sv")
+    mutated = agent.replace(needle, replacement, 1)
+    assert mutated != agent, "failed to construct monitor FIFO mutation"
+
+    with pytest.raises(AssertionError):
+        assert_advance_agent_monitor_fifo_contract(mutated)
 
 
 def test_port_retains_env_owned_fifo_lifecycle(tmp_path):

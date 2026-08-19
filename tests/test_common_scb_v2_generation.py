@@ -1288,8 +1288,24 @@ def assert_scb_push(body: str, agent: str, direction: str):
     return match
 
 
+def assert_no_advance_transaction_tlm_endpoints(
+    source_raw: str, component: str, legacy_tokens: tuple[str, ...]
+) -> None:
+    source = strip_sv_comments(source_raw)
+    for token in ("uvm_analysis_imp", "uvm_analysis_port", *legacy_tokens):
+        assert token not in source, (
+            f"Advance {component} must not expose legacy transaction endpoint {token}"
+        )
+
+
 def assert_checker_v2_wiring(checker_raw: str, platform_type: PlatformType) -> None:
     checker = strip_sv_comments(checker_raw)
+    if platform_type is PlatformType.ADVANCE:
+        assert_no_advance_transaction_tlm_endpoints(
+            checker_raw,
+            "checker",
+            ("m_from_rm_", "m_from_agt_", "write_from_rm_", "write_from_agt_"),
+        )
     for agent in SCB_WIRING_AGENTS:
         scoreboard_declaration = (
             rf"(?m)^[ \t]*common_uvm_scb\s*#\s*\(\s*{agent}_trans\s*\)\s+"
@@ -1307,9 +1323,6 @@ def assert_checker_v2_wiring(checker_raw: str, platform_type: PlatformType) -> N
         )
 
         if platform_type is PlatformType.ADVANCE:
-            assert not re.search(
-                rf"\buvm_analysis_(?:imp|port)[^;]*\b{agent}\b", checker
-            ), f"Advance {agent} checker must not expose transaction TLM endpoints"
             expected_body = sv_task_body(
                 checker,
                 rf"^[ \t]*task\s+top_checker::send_{agent}_expected\s*\(\s*"
@@ -1391,10 +1404,12 @@ def assert_checker_v2_wiring(checker_raw: str, platform_type: PlatformType) -> N
 
 def assert_advance_rm_and_env_wiring(rm_raw: str, env_raw: str) -> None:
     rm = strip_sv_comments(rm_raw)
+    assert_no_advance_transaction_tlm_endpoints(
+        rm_raw,
+        "RM",
+        ("m_from_", "_expected_ap", "write_from_"),
+    )
     for agent in SCB_WIRING_AGENTS:
-        assert not re.search(
-            rf"\buvm_analysis_(?:imp|port)[^;]*\b{agent}\b", rm
-        ), f"Advance RM {agent} must not expose transaction TLM endpoints"
         prediction = sv_task_body(
             rm,
             rf"^[ \t]*task\s+top_rm::predict_{agent}\s*\(\s*input\s+"
@@ -2096,6 +2111,29 @@ def test_wiring_contracts_reject_swaps_missing_agents_and_env_transaction_paths(
     assert missing_agent != checker, "failed to construct missing-agent mutation"
     with pytest.raises(AssertionError):
         assert_checker_v2_wiring(missing_agent, PlatformType.ADVANCE)
+
+    legacy_checker_endpoint = checker.replace(
+        "common_uvm_scb#(axi_trans) m_axi_scb;",
+        "uvm_analysis_imp_from_rm_axi#(axi_trans, top_checker) "
+        "m_from_rm_axi_imp;\n"
+        "    common_uvm_scb#(axi_trans) m_axi_scb;",
+        1,
+    )
+    assert legacy_checker_endpoint != checker, (
+        "failed to inject legacy checker analysis imp"
+    )
+    with pytest.raises(AssertionError):
+        assert_checker_v2_wiring(legacy_checker_endpoint, PlatformType.ADVANCE)
+
+    legacy_rm_endpoint = rm.replace(
+        "extern function new(string name, uvm_component parent);",
+        "uvm_analysis_port#(axi_trans) m_axi_expected_ap;\n\n"
+        "    extern function new(string name, uvm_component parent);",
+        1,
+    )
+    assert legacy_rm_endpoint != rm, "failed to inject legacy RM analysis port"
+    with pytest.raises(AssertionError):
+        assert_advance_rm_and_env_wiring(legacy_rm_endpoint, env)
 
     connected = env.replace(
         "    // connect vsqr sqr handles",
