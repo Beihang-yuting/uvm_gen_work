@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -127,6 +128,44 @@ def run_make(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
     )
+
+
+def install_fake_vcs(tmp_path: Path) -> Path:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_vcs = fake_bin / "vcs"
+    fake_vcs.write_text(
+        """#!/usr/bin/env python3
+import os
+import stat
+import sys
+from pathlib import Path
+
+event_log = Path(os.environ["EVENT_LOG"])
+stale_path = Path(os.environ["STALE_PATH"])
+if stale_path.exists():
+    event_log.write_text("compile-before-clean\\n", encoding="utf-8")
+    raise SystemExit(90)
+
+arguments = sys.argv[1:]
+with event_log.open("a", encoding="utf-8") as log:
+    log.write("compile " + " ".join(arguments) + "\\n")
+output = Path(arguments[arguments.index("-o") + 1])
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text(
+    "#!/usr/bin/env python3\\n"
+    "import os, sys\\n"
+    "from pathlib import Path\\n"
+    "with Path(os.environ['EVENT_LOG']).open('a', encoding='utf-8') as log:\\n"
+    "    log.write('run ' + ' '.join(sys.argv[1:]) + '\\\\n')\\n",
+    encoding="utf-8",
+)
+output.chmod(output.stat().st_mode | stat.S_IXUSR)
+""",
+        encoding="utf-8",
+    )
+    fake_vcs.chmod(0o755)
+    return fake_bin
 
 
 def assert_task6_filelist_contract(
@@ -301,8 +340,11 @@ def test_scoreboard_proxy_is_aip_conditional(tmp_path, platform_type, aip_core):
 def test_tc_base_uses_standard_uvm_report_server(tmp_path, platform_type):
     project = generate(tmp_path, platform_type, aip_core=False)
     base_test = read(project, "tc/tc_base.sv")
+    active_base_test = strip_sv_comments(base_test)
     assert "common_report_server" not in base_test
     assert "uvm_report_server::set_server" not in base_test
+    assert "uvm_report_server::get_server()" in active_base_test
+    assert not re.search(r"(?<!::)\bget_report_server\s*\(", active_base_test)
     assert '$timeformat(-9,2,"ns",12);' in base_test
     assert "get_severity_count(UVM_ERROR)" in base_test
 
@@ -960,3 +1002,87 @@ def test_makefile_fsdb_preflight_fails_clearly(
     assert diagnostic in output
     assert "vcs " not in output
     assert "simv" not in output
+
+
+@pytest.mark.parametrize(
+    ("jobs", "wave"),
+    [
+        (None, "none"),
+        ("4", "none"),
+        (None, "fsdb"),
+        ("4", "fsdb"),
+    ],
+    ids=["serial-none", "parallel-none", "serial-fsdb", "parallel-fsdb"],
+)
+def test_makefile_rerun_cleans_compiles_once_then_runs(
+    tmp_path, jobs, wave
+):
+    fake_bin = install_fake_vcs(tmp_path)
+    sim_dir = tmp_path / "artifacts/sim"
+    stale_path = sim_dir / "runs/stale.marker"
+    stale_path.parent.mkdir(parents=True)
+    stale_path.write_text("must be removed before compile", encoding="utf-8")
+    stale_simv = sim_dir / "build/simv"
+    stale_simv.parent.mkdir(parents=True)
+    stale_simv.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "with Path(os.environ['EVENT_LOG']).open('a') as log:\n"
+        "    log.write('stale-run\\n')\n",
+        encoding="utf-8",
+    )
+    stale_simv.chmod(0o755)
+    event_log = tmp_path / "events.log"
+    verdi_home = tmp_path / "verdi"
+    fsdb_pli_dir = verdi_home / "share/PLI/VCS/LINUX64"
+    fsdb_pli_dir.mkdir(parents=True)
+    (fsdb_pli_dir / "novas.tab").touch()
+    (fsdb_pli_dir / "pli.a").touch()
+    command = [
+        "make",
+        "--no-print-directory",
+        "-f",
+        str(REPOSITORY / "Makefile.uvm_template"),
+    ]
+    if jobs is not None:
+        command.append(f"-j{jobs}")
+    command.extend(
+        [
+            "rerun",
+            "SIM_DIR=artifacts/sim",
+            f"WAVE={wave}",
+            f"VERDI_HOME={verdi_home}",
+            "COV=1",
+            "XPROP=1",
+            "TEST=tc_rerun",
+            "SEED=41",
+        ]
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "EVENT_LOG": str(event_log),
+            "STALE_PATH": str(stale_path),
+        }
+    )
+
+    completed = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = completed.stdout + completed.stderr
+    events = event_log.read_text(encoding="utf-8").splitlines()
+
+    assert completed.returncode == 0, output
+    assert [event.split()[0] for event in events] == ["compile", "run"]
+    assert events[0].count("-o artifacts/sim/build/simv") == 1
+    assert "-cm line+cond+fsm+branch+tgl" in events[0]
+    assert "-xprop=cfg/xprop.cfg" in events[0]
+    assert "+UVM_TESTNAME=tc_rerun" in events[1]
+    assert "+ntb_random_seed=41" in events[1]

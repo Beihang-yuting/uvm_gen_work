@@ -31,6 +31,7 @@ SIM_DIR   := sim
 endif
 
 # ---------------- Derived paths ----------------
+THIS_MAKEFILE := $(abspath $(firstword $(MAKEFILE_LIST)))
 BUILD_DIR := $(SIM_DIR)/build
 LOG_DIR   := $(SIM_DIR)/logs
 WAVE_DIR  := $(SIM_DIR)/waves
@@ -142,7 +143,7 @@ fsdb-preflight:
 
 cmp: $(SIMV)
 
-$(SIMV): $(FSDB_PREREQ) | dirs
+$(SIMV): | dirs $(FSDB_PREREQ)
 	vcs $(VCS_OPTS)
 
 run: cmp
@@ -162,7 +163,9 @@ ifeq ($(WAVE),vpd)
 endif
 	@echo "Run log: $(RUN_LOG)"
 
-rerun: clean cmp run
+rerun: clean
+	+$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) -B cmp
+	+$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) run
 
 verdi:
 	@if [ "$(WAVE)" = "fsdb" ] && [ -f $(WAVE_DIR)/$(RUN_NAME).fsdb ]; then \

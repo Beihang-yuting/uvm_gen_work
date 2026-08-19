@@ -61,7 +61,7 @@ function void tc_base::report_phase(uvm_phase phase);
     int  err_num,war_num,fatal_num;
     super.report_phase(phase);
 
-    server     = get_report_server();
+    server     = uvm_report_server::get_server();
     err_num    = server.get_severity_count(UVM_ERROR);
     war_num    = server.get_severity_count(UVM_WARNING);
     fatal_num  = server.get_severity_count(UVM_FATAL);
