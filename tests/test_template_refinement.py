@@ -100,3 +100,46 @@ def test_tc_base_uses_standard_uvm_report_server(tmp_path, platform_type):
     assert "uvm_report_server::set_server" not in base_test
     assert '$timeformat(-9,2,"ns",12);' in base_test
     assert "get_severity_count(UVM_ERROR)" in base_test
+
+
+def test_common_macros_have_fixed_public_signatures(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type, aip_core=False)
+    declarations = read(project, "common/common_dec.sv")
+
+    expected_signatures = (
+        "`define UVG_IF_CONNECT(ROLE, FLOW, RTL_SIG, VIF_SIG)",
+        "`define UVG_VIF_SET(IF_TYPE, PATH, VIF)",
+        "`define UVG_VIF_GET(IF_TYPE, VIF)",
+        "`define UVG_CLK(CLK, PERIOD, OFFSET)",
+        "`define UVG_RSTN(RST_N, CLK, CYCLES)",
+        "`define UVG_STATIC_ASSERT(NAME, EXPR, MESSAGE)",
+    )
+    for signature in expected_signatures:
+        assert signature in declarations
+
+    assert "RTL_SIG, VIF_SIG" in declarations
+    assert "CLK_GEN" not in declarations
+    assert "RST_GEN" not in declarations
+
+
+def test_bind_examples_are_generated_but_disabled(tmp_path, platform_type):
+    project = generate(tmp_path, platform_type, aip_core=False)
+    bind_example = read(project, "th/bind/bind_example.sv")
+    common_sva = read(project, "th/bind/common_sva.svh")
+
+    assert "UVG_SVA_NO_X" in common_sva
+    assert "UVG_SVA_HOLD" in common_sva
+    for phrase in (
+        "module type",
+        "hierarchical instance",
+        "parameterized checker",
+        "interface instance",
+        "generate hierarchy",
+        "multiple checkers",
+    ):
+        assert phrase in bind_example
+
+    active_env_lines = active_filelist_lines(read(project, "cfg/env.f"))
+    assert not any(
+        "../th/bind/bind_example.sv" in line for line in active_env_lines
+    )

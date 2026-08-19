@@ -3,20 +3,64 @@
 `define  COMMON_DEC__SV
 
 
-`define CLK_GEN(CLK,HALF_PERIED,OFFSET) \
-reg CLK; \
-initial begin: ``CLK``_gen \
-    CLK <= 0;\
-    #OFFSET;\
-    forever # HALF_PERIED CLK = ~CLK; \
-end
+`define UVG_STATIC_ASSERT(NAME, EXPR, MESSAGE) \
+    if (!(EXPR)) begin : NAME \
+        UVG_STATIC_ASSERTION_FAILED #(.MESSAGE(MESSAGE)) \
+            u_uvg_static_assertion_failed(); \
+    end
 
-`define RST_GEN(RST_N,EN_DLY) \
-reg RST_N; \
-initial begin: ``RST_N``_gen\
-    RST_N <= '0; \
-    #EN_DLY; \
-    RST_N <= '1; \
-end
+`define UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    if ($bits(RTL_SIG) != $bits(VIF_SIG)) begin \
+        UVG_STATIC_ASSERTION_FAILED #( \
+            .MESSAGE("UVG_IF_CONNECT width mismatch") \
+        ) u_uvg_if_width_mismatch(); \
+    end
+
+`define UVG_IF_CONNECT_MASTER_M2S(RTL_SIG, VIF_SIG) \
+    `UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    assign RTL_SIG = VIF_SIG
+`define UVG_IF_CONNECT_MASTER_S2M(RTL_SIG, VIF_SIG) \
+    `UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    assign VIF_SIG = RTL_SIG
+`define UVG_IF_CONNECT_SLAVE_M2S(RTL_SIG, VIF_SIG) \
+    `UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    assign VIF_SIG = RTL_SIG
+`define UVG_IF_CONNECT_SLAVE_S2M(RTL_SIG, VIF_SIG) \
+    `UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    assign RTL_SIG = VIF_SIG
+`define UVG_IF_CONNECT_MONITOR_M2S(RTL_SIG, VIF_SIG) \
+    `UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    assign VIF_SIG = RTL_SIG
+`define UVG_IF_CONNECT_MONITOR_S2M(RTL_SIG, VIF_SIG) \
+    `UVG_IF_WIDTH_ASSERT(RTL_SIG, VIF_SIG) \
+    assign VIF_SIG = RTL_SIG
+
+`define UVG_IF_CONNECT(ROLE, FLOW, RTL_SIG, VIF_SIG) \
+    `UVG_IF_CONNECT_``ROLE``_``FLOW(RTL_SIG, VIF_SIG)
+
+`define UVG_VIF_SET(IF_TYPE, PATH, VIF) \
+    uvm_config_db#(virtual IF_TYPE)::set(null, PATH, "m_vif", VIF)
+
+`define UVG_VIF_GET(IF_TYPE, VIF) \
+    if (!uvm_config_db#(virtual IF_TYPE)::get(this, "", "m_vif", VIF)) begin \
+        `uvm_fatal("UVG_VIF_GET", \
+            $sformatf("missing virtual interface type=%s component=%s field=m_vif", \
+                      `"IF_TYPE`", get_full_name())) \
+    end
+
+`define UVG_CLK(CLK, PERIOD, OFFSET) \
+    initial begin \
+        CLK = 1'b0; \
+        #(OFFSET); \
+        forever #((PERIOD)/2.0) CLK = ~CLK; \
+    end
+
+`define UVG_RSTN(RST_N, CLK, CYCLES) \
+    initial begin \
+        RST_N = 1'b0; \
+        repeat (CYCLES) @(posedge CLK); \
+        @(negedge CLK); \
+        RST_N = 1'b1; \
+    end
 
 `endif

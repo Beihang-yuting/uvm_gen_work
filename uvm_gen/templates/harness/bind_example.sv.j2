@@ -1,0 +1,51 @@
+{{ header(file_name) }}
+`ifndef UVG_BIND_EXAMPLE__SV
+`define UVG_BIND_EXAMPLE__SV
+
+`include "../th/bind/common_sva.svh"
+
+module uvg_bind_checker #(
+    parameter int WIDTH = 1
+) (
+    input logic             clk,
+    input logic             rst_n,
+    input logic [WIDTH-1:0] payload
+);
+    `UVG_SVA_NO_X(p_payload_no_x, clk, rst_n, payload)
+endmodule
+
+// Compile order: target RTL modules/interfaces first, harness second, this
+// file last. Merely adding this file is safe because example binds are gated.
+`ifdef UVG_BIND_EXAMPLE_ENABLE
+    // module type: bind every instance of dut_module.
+    bind dut_module uvg_bind_checker #(.WIDTH(32)) u_type_check (
+        .clk(clk), .rst_n(rst_n), .payload(data)
+    );
+
+    // hierarchical instance: bind one DUT instance only.
+    bind harness.u_dut uvg_bind_checker #(.WIDTH(32)) u_instance_check (
+        .clk(clk), .rst_n(rst_n), .payload(data)
+    );
+
+    // parameterized checker and interface instance.
+    bind protocol_if uvg_bind_checker #(.WIDTH(DATA_WIDTH)) u_if_check (
+        .clk(clk), .rst_n(rst_n), .payload(payload)
+    );
+
+    // SVA module/checker attached below a generate hierarchy.
+    bind harness.u_dut.g_lane[0].u_lane
+        uvg_bind_checker #(.WIDTH(8)) u_lane_check (
+            .clk(clk), .rst_n(rst_n), .payload(lane_data)
+        );
+
+    // multiple checkers on the same module type.
+    bind dut_module uvg_bind_checker #(.WIDTH(8)) u_header_check (
+        .clk(clk), .rst_n(rst_n), .payload(header)
+    );
+    bind dut_module uvg_bind_checker #(.WIDTH(16)) u_payload_check (
+        .clk(clk), .rst_n(rst_n), .payload(payload)
+    );
+
+`endif
+
+`endif

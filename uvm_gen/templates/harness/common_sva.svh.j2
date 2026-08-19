@@ -1,0 +1,16 @@
+{{ header(file_name) }}
+`ifndef UVG_COMMON_SVA__SVH
+`define UVG_COMMON_SVA__SVH
+
+`define UVG_SVA_NO_X(NAME, CLK, RST_N, SIGNAL) \
+    NAME: assert property (@(posedge CLK) disable iff (!(RST_N)) \
+                           !$isunknown(SIGNAL)) \
+        else $error("%s contains X/Z", `"SIGNAL`")
+
+`define UVG_SVA_HOLD(NAME, CLK, RST_N, VALID, READY, PAYLOAD) \
+    NAME: assert property (@(posedge CLK) disable iff (!(RST_N)) \
+                           (VALID && !READY) |=> \
+                           (VALID && $stable(PAYLOAD))) \
+        else $error("%s changed while stalled", `"PAYLOAD`")
+
+`endif
