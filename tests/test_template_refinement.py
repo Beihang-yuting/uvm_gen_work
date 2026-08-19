@@ -690,9 +690,230 @@ def test_standalone_vcs_matrix_runner_covers_public_cli_and_root_filelist():
     assert "-t \"${platform_type}\"" in source
     assert "--aip-core" in source
     assert "-F test_env/cfg/tb.f" in source
+    assert "+UVM_TESTNAME=axi_base_test" in source
+    assert "STANDALONE_AGENT_TEST_PASS" in source
+    assert "normalize_log" in source
+    assert "require_nonempty_log" in source
+    assert "require_clean_runtime" in source
+    assert "Error-\\[[^]]+\\]" in source
+    assert "segmentation fault" in source
     for label in ("advance_off", "advance_on", "port_off", "port_on"):
         assert label in source
-    assert "STANDALONE_AGENT_VCS_MATRIX_PASS" in source
+    assert "STANDALONE_AGENT_MATRIX_PASS" in source
+    assert "STANDALONE_AGENT_MATRIX_PASS total=4" in source
+
+
+def test_standalone_base_test_emits_stable_pass_marker(
+    tmp_path, platform_type
+):
+    project = generate_standalone(tmp_path, platform_type, aip_core=False)
+    base_test = read(project, "test_env/axi_base_test.sv")
+    run_phase = task_body(base_test, "run_phase")
+
+    assert run_phase.count('$display("STANDALONE_AGENT_TEST_PASS");') == 1
+    delay = run_phase.index("#100ns;")
+    marker = run_phase.index('$display("STANDALONE_AGENT_TEST_PASS");')
+    drop = run_phase.index("phase.drop_objection(this);")
+    assert delay < marker < drop
+
+
+def run_synthetic_standalone_agent_matrix(
+    tmp_path: Path, mode: str
+) -> tuple[subprocess.CompletedProcess, Path]:
+    runner = REPOSITORY / "tests/vcs/run_standalone_agent_matrix.sh"
+    aip_home = tmp_path / "aip"
+    aip_core = aip_home / "aip_core"
+    aip_core.mkdir(parents=True)
+    (aip_core / "aip_core_pkg.sv").write_text(
+        "package aip_core_pkg; endpackage\n", encoding="utf-8"
+    )
+
+    event_log = tmp_path / "events.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_vcs = fake_bin / "vcs"
+    fake_vcs.write_text(
+        r'''#!/usr/bin/env bash
+set -euo pipefail
+
+label=$(basename "$(dirname "$PWD")")
+compile_log=
+output=
+arguments=("$@")
+while (($#)); do
+    case $1 in
+        -l) compile_log=$2; shift 2 ;;
+        -o) output=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n ${compile_log} && -n ${output} ]]
+printf 'compile %s %s\n' "${label}" "${arguments[*]}" \
+    >> "${STANDALONE_FAKE_EVENTS}"
+
+case ${STANDALONE_FAKE_MODE} in
+    compile_timeout)
+        printf 'synthetic compile timeout\n'
+        exit 124
+        ;;
+    compile_crash)
+        printf 'Segmentation fault (synthetic compile crash)\n'
+        exit 139
+        ;;
+    compile_missing_primary) ;;
+    compile_empty_primary) : > "${compile_log}" ;;
+    compile_diagnostic)
+        printf 'Error-[SYNTHETIC] injected compile diagnostic\n' \
+            > "${compile_log}"
+        ;;
+    *) printf 'synthetic compile completed\n' > "${compile_log}" ;;
+esac
+
+cat > "${output}" <<'SIMV'
+#!/usr/bin/env bash
+set -euo pipefail
+
+label=$(basename "$(dirname "$PWD")")
+run_log=
+arguments=("$@")
+while (($#)); do
+    case $1 in
+        -l) run_log=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n ${run_log} ]]
+printf 'run %s %s\n' "${label}" "${arguments[*]}" \
+    >> "${STANDALONE_FAKE_EVENTS}"
+
+case ${STANDALONE_FAKE_MODE} in
+    runtime_timeout)
+        printf 'synthetic runtime timeout\n'
+        exit 124
+        ;;
+    runtime_crash)
+        printf 'Segmentation fault (synthetic runtime crash)\n'
+        exit 139
+        ;;
+    runtime_missing_primary)
+        printf 'synthetic runtime console\n'
+        exit 0
+        ;;
+    runtime_empty_primary) : > "${run_log}" ;;
+    runtime_diagnostic)
+        printf '%s\n' \
+            'STANDALONE_AGENT_TEST_PASS' \
+            'Error-[SYNTHETIC] injected runtime diagnostic' \
+            'UVM_ERROR : 0' \
+            'UVM_FATAL : 0' > "${run_log}"
+        ;;
+    runtime_vif_fatal)
+        printf '%s\n' \
+            'UVM_FATAL axi_agent.sv(1) @ 0: uvm_test_top.m_env.m_axi_agt [UVG_VIF_GET] missing virtual interface type=axi_if component=uvm_test_top.m_env.m_axi_agt field=m_axi_if' \
+            'UVM_ERROR : 0' \
+            'UVM_FATAL : 1' > "${run_log}"
+        ;;
+    *)
+        printf '%s\n' \
+            'STANDALONE_AGENT_TEST_PASS' \
+            'UVM_ERROR : 0' \
+            'UVM_FATAL : 0' > "${run_log}"
+        ;;
+esac
+
+if [[ ${STANDALONE_FAKE_MODE} != runtime_empty_console ]]; then
+    cat "${run_log}"
+fi
+SIMV
+chmod +x "${output}"
+
+if [[ ${STANDALONE_FAKE_MODE} != compile_empty_console ]]; then
+    printf 'synthetic compile console\n'
+fi
+''',
+        encoding="utf-8",
+    )
+    fake_vcs.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "STANDALONE_FAKE_EVENTS": str(event_log),
+            "STANDALONE_FAKE_MODE": mode,
+            "TMPDIR": str(tmp_path),
+        }
+    )
+    completed = subprocess.run(
+        [str(runner), str(aip_home)],
+        cwd=REPOSITORY,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed, event_log
+
+
+@pytest.mark.parametrize(
+    ("mode", "diagnostic"),
+    [
+        ("compile_missing_primary", "compile primary log missing or empty"),
+        ("compile_empty_primary", "compile primary log missing or empty"),
+        ("compile_empty_console", "compile console log missing or empty"),
+        ("compile_diagnostic", "unexpected compile diagnostic"),
+        ("compile_timeout", "compile timeout/infrastructure failure (exit 124)"),
+        ("compile_crash", "compile failed/infrastructure failure (exit 139)"),
+        ("runtime_missing_primary", "runtime primary log missing or empty"),
+        ("runtime_empty_primary", "runtime primary log missing or empty"),
+        ("runtime_empty_console", "runtime console log missing or empty"),
+        ("runtime_diagnostic", "unexpected runtime diagnostic"),
+        ("runtime_timeout", "runtime timeout/infrastructure failure (exit 124)"),
+        ("runtime_crash", "runtime failed/infrastructure failure (exit 139)"),
+        ("runtime_vif_fatal", "unexpected runtime UVM diagnostic"),
+    ],
+)
+def test_standalone_matrix_rejects_invalid_compile_and_runtime_evidence(
+    tmp_path, mode, diagnostic
+):
+    completed, _ = run_synthetic_standalone_agent_matrix(tmp_path, mode)
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode != 0
+    assert diagnostic in output
+    assert "STANDALONE_AGENT_MATRIX_PASS" not in output
+
+
+def test_standalone_matrix_requires_four_clean_compile_and_runtime_legs(
+    tmp_path,
+):
+    completed, event_log = run_synthetic_standalone_agent_matrix(
+        tmp_path, "healthy"
+    )
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode == 0, output
+    labels = re.findall(
+        r"(?m)^STANDALONE_AGENT_MATRIX_PASS "
+        r"(advance_off|advance_on|port_off|port_on)$",
+        output,
+    )
+    assert labels == ["advance_off", "advance_on", "port_off", "port_on"]
+    assert output.count("STANDALONE_AGENT_MATRIX_PASS total=4") == 1
+    events = event_log.read_text(encoding="utf-8").splitlines()
+    assert [event.split()[0] for event in events] == [
+        "compile",
+        "run",
+        "compile",
+        "run",
+        "compile",
+        "run",
+        "compile",
+        "run",
+    ]
+    run_events = [event for event in events if event.startswith("run ")]
+    assert len(run_events) == 4
+    assert all("+UVM_TESTNAME=axi_base_test" in event for event in run_events)
 
 
 def test_interactive_cli_describes_current_aip_integration():

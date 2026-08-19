@@ -25,6 +25,7 @@ class {{ name }}_base_test extends uvm_test;
         phase.raise_objection(this);
         `uvm_info(get_type_name, "{{ name }}_base_test run_phase started", UVM_NONE)
         #100ns;
+        $display("STANDALONE_AGENT_TEST_PASS");
         phase.drop_objection(this);
     endtask
 
