@@ -72,7 +72,11 @@ def split_config_lines(
     source: str, comment_prefix: str
 ) -> tuple[list[str], list[str]]:
     lines = [line.strip() for line in source.splitlines() if line.strip()]
-    comments = [line for line in lines if line.startswith(comment_prefix)]
+    comments = [
+        " ".join(line.removeprefix(comment_prefix).strip().split())
+        for line in lines
+        if line.startswith(comment_prefix)
+    ]
     active = [line for line in lines if not line.startswith(comment_prefix)]
     return active, comments
 
@@ -138,7 +142,7 @@ def assert_task6_filelist_contract(
 
     physical_lines = env_source.splitlines()
     harness_index = physical_lines.index(harness)
-    assert physical_lines[harness_index + 1 :] == [
+    assert physical_lines[harness_index + 1 : harness_index + 3] == [
         "# Optional bind checks compile after the harness:",
         "# ../th/bind/bind_example.sv",
     ]
@@ -152,35 +156,42 @@ def assert_task6_cfg_contract(
         "merge = tmerge;",
         "tree {harness} {xpropOn};",
     ]
-    assert xprop_comments == [
-        "// Compile with: vcs ... -xprop=xprop.cfg -f tb.f",
-        "// tmerge evaluates the 0 and 1 branches and merges their results.",
-        "// xmerge is more pessimistic and directly propagates X.",
-        "// instance {harness.u_dut.u0} {xpropOff};",
-        "// module {sram_model} {xpropOff};",
-    ]
+    assert any(
+        re.search(r"\bvcs\b.*-xprop=xprop\.cfg.*-f\s+tb\.f", comment)
+        for comment in xprop_comments
+    )
+    assert any(
+        re.search(r"\btmerge\b.*\bmerg", comment, flags=re.IGNORECASE)
+        for comment in xprop_comments
+    )
+    assert any("xmerge" in comment for comment in xprop_comments)
+    assert "instance {harness.u_dut.u0} {xpropOff};" in xprop_comments
+    assert "module {sram_model} {xpropOff};" in xprop_comments
     assert "xpropMode" not in xprop
 
     initreg_active, initreg_comments = split_config_lines(initreg, "//")
     assert initreg_active == ["+vcs+initreg+random"]
-    assert initreg_comments == [
-        "// Pass this response file during compile: vcs ... -f initreg.cfg",
-        "// Alternatives, enable one global policy only:",
-        "// +vcs+initreg+0",
-        "// +vcs+initreg+1",
-    ]
+    assert any(
+        re.search(r"\bvcs\b.*-f\s+initreg\.cfg", comment)
+        for comment in initreg_comments
+    )
+    assert "+vcs+initreg+0" in initreg_comments
+    assert "+vcs+initreg+1" in initreg_comments
     assert not re.search(r"(?<!\+vcs)\+initreg\+", initreg)
 
     coverage_active, coverage_comments = split_config_lines(coverage, "//")
     assert coverage_active == []
-    assert coverage_comments == [
-        "// Compile: vcs ... -cm line+cond+fsm+tgl+branch "
-        "-cm_hier coverage.cfg",
-        "// Enable after adding a DUT:",
-        "// +tree harness.u_dut",
-        "// -module sram_model",
-    ]
-    assert "-cm_cond" not in coverage
+    assert any(
+        re.search(
+            r"\bvcs\b.*-cm\s+line\+cond\+fsm\+tgl\+branch.*"
+            r"-cm_hier\s+coverage\.cfg",
+            comment,
+        )
+        for comment in coverage_comments
+    )
+    assert "+tree harness.u_dut" in coverage_comments
+    assert "-module sram_model" in coverage_comments
+    assert not re.search(r"-cm_cond\s+obsv\b", coverage)
 
     wave_active, wave_comments = split_config_lines(wave, "#")
     assert wave_active == [
@@ -189,9 +200,14 @@ def assert_task6_cfg_contract(
         "run",
         "quit",
     ]
-    assert wave_comments == [
-        "# Run with: ./simv -ucli -i wave.tcl +UVM_TESTNAME=tc_base"
-    ]
+    assert any(
+        re.search(
+            r"\./simv\b.*-ucli\s+-i\s+wave\.tcl.*"
+            r"\+UVM_TESTNAME=tc_base",
+            comment,
+        )
+        for comment in wave_comments
+    )
     assert 'fsdbDumpvars 0 "tb"' not in wave
     assert "\ufffd" not in wave
 
@@ -714,6 +730,11 @@ def test_filelist_contract_rejects_env_mutations(
             "// exclusion example removed",
         ),
         (
+            "cfg/coverage.cfg",
+            "// -module sram_model",
+            "// -module sram_model\n// -cm_cond obsv",
+        ),
+        (
             "cfg/wave.tcl",
             "run\nquit",
             "quit\nrun",
@@ -730,6 +751,7 @@ def test_filelist_contract_rejects_env_mutations(
         "active-initreg-alternative",
         "active-coverage-hierarchy",
         "missing-coverage-exclusion",
+        "forbidden-coverage-obsv",
         "wave-command-order",
         "wave-guidance-option",
     ],
@@ -778,3 +800,40 @@ def test_makefile_contract_rejects_compile_mutations(needle, replacement):
 
     with pytest.raises(AssertionError):
         assert_task6_makefile_contract(mutated)
+
+
+def test_filelist_contract_allows_trailing_comments(tmp_path):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    env_source = read(project, "cfg/env.f") + "\n# Local project note\n\n"
+
+    assert_task6_filelist_contract(
+        env_source,
+        read(project, "cfg/tb.f"),
+        ["-F   ./dut.f", "-F   ./env.f", "-F   ../tc/tc.f"],
+    )
+
+
+def test_cfg_contract_allows_harmless_comments_and_wording(tmp_path):
+    project = generate(tmp_path, PlatformType.ADVANCE, aip_core=False)
+    xprop = read(project, "cfg/xprop.cfg").replace(
+        "// tmerge evaluates the 0 and 1 branches and merges their results.",
+        "// tmerge explores both values before merging the result.",
+    )
+    initreg = read(project, "cfg/initreg.cfg").replace(
+        "// Pass this response file during compile: vcs ... -f initreg.cfg",
+        "// Compile using: vcs ... -f initreg.cfg",
+    )
+    coverage = (
+        read(project, "cfg/coverage.cfg")
+        + "// Optional experiment: -cm_cond basic\n"
+    )
+    wave = read(project, "cfg/wave.tcl").replace(
+        "# Run with:", "# Example:"
+    )
+
+    assert_task6_cfg_contract(
+        xprop + "// Local xprop note\n",
+        initreg + "// Local initreg note\n",
+        coverage,
+        wave + "# Local waveform note\n",
+    )
