@@ -7,8 +7,25 @@ if [[ $# -ne 3 ]]; then
 fi
 
 project_dir=$(realpath -- "$1")
-aip_home=$(realpath -- "$2")
+requested_aip_home=$2
+if [[ ! -d ${requested_aip_home} ]] \
+        || ! aip_home=$(realpath -- "${requested_aip_home}" 2>/dev/null); then
+    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${requested_aip_home}" >&2
+    exit 2
+fi
 aip_core_dir="${aip_home}/aip_core"
+
+export AIP_HOME="${aip_home}"
+aip_compile_sources=(
+    "+incdir+${AIP_HOME}/aip_core"
+    "${AIP_HOME}/aip_core/aip_core_pkg.sv"
+)
+if [[ ! -d ${aip_compile_sources[0]#+incdir+} \
+        || ! -f ${aip_compile_sources[1]} \
+        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
+    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}" >&2
+    exit 2
+fi
 adapter_tb=$(realpath -- "$3")
 
 if [[ ! -f ${project_dir}/common/common_lib_pkg.f ]]; then
@@ -17,11 +34,6 @@ if [[ ! -f ${project_dir}/common/common_lib_pkg.f ]]; then
 fi
 if [[ ! -f ${project_dir}/common/common_scb_aip_adapter.sv ]]; then
     echo "generated AIP adapter not found: ${project_dir}" >&2
-    exit 2
-fi
-if [[ ! -f "${aip_core_dir}/aip_core_pkg.sv" \
-        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
-    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}" >&2
     exit 2
 fi
 if [[ ! -f ${adapter_tb} ]]; then
@@ -39,11 +51,6 @@ mkdir -p "${run_dir}/common"
 cp -R "${project_dir}/common/." "${run_dir}/common/"
 cp -- "${adapter_tb}" "${run_dir}/common/common_scb_aip_adapter_tb.sv"
 
-export AIP_HOME="${aip_home}"
-aip_compile_sources=(
-    "+incdir+${AIP_HOME}/aip_core"
-    "${AIP_HOME}/aip_core/aip_core_pkg.sv"
-)
 compile_log="${run_dir}/compile.log"
 compile_console="${run_dir}/compile_console.log"
 run_log="${run_dir}/run.log"

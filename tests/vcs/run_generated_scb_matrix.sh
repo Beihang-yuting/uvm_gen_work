@@ -292,15 +292,16 @@ validate_project() {
     local env_file="${project_dir}/cfg/env.f"
     local common_file="${project_dir}/common/common_lib_pkg.f"
     local aip_line
+    local aip_incdir_line
     local env_line
     local package_line
-    local subscriber_line
     local adapter_line
     local aip_count
+    local aip_incdir_count
+    local aip_reference_count
     local env_count
     local common_include_count
     local package_count
-    local subscriber_count
     local adapter_count
 
     if [[ ! -f ${tb_file} || ! -f ${env_file} || ! -f ${common_file} ]]; then
@@ -332,8 +333,15 @@ validate_project() {
                 fail "${label}: AIP-on project is missing adapter/Tcl test"
                 return 1
             fi
-            aip_count=$(grep -Fxc '$AIP_HOME/aip_core/aip_core_pkg.sv' \
+            aip_incdir_count=$(grep -Fxc "${aip_filelist_sources[0]}" \
                 "${tb_file}" || true)
+            aip_count=$(grep -Fxc "${aip_filelist_sources[1]}" \
+                "${tb_file}" || true)
+            aip_reference_count=$(awk '
+                /^[[:space:]]*($|#|\/\/)/ { next }
+                /AIP[A-Z_]*HOME|aip_core_pkg[.]sv/ { count++ }
+                END { print count + 0 }
+            ' "${tb_file}")
             env_count=$(grep -Ec \
                 '^[[:space:]]*-F[[:space:]]+\./env\.f[[:space:]]*$' \
                 "${tb_file}" || true)
@@ -342,30 +350,29 @@ validate_project() {
                 "${env_file}" || true)
             package_count=$(grep -Fxc './common_lib_pkg.sv' \
                 "${common_file}" || true)
-            subscriber_count=$(grep -Fxc './aip_activity_subscriber.sv' \
-                "${common_file}" || true)
             adapter_count=$(grep -Fxc './common_scb_aip_adapter.sv' \
                 "${common_file}" || true)
-            if [[ ${aip_count} -ne 1 || ${env_count} -ne 1 \
+            if [[ ${aip_incdir_count} -ne 1 || ${aip_count} -ne 1 \
+                    || ${aip_reference_count} -ne 2 || ${env_count} -ne 1 \
                     || ${common_include_count} -ne 1 || ${package_count} -ne 1 \
-                    || ${subscriber_count} -ne 1 || ${adapter_count} -ne 1 ]]; then
-                fail "${label}: AIP-on filelist entries must appear exactly once (aip_pkg=${aip_count} env=${env_count} common_include=${common_include_count} common_pkg=${package_count} subscriber=${subscriber_count} adapter=${adapter_count})"
+                    || ${adapter_count} -ne 1 ]]; then
+                fail "${label}: AIP-on filelist entries must appear exactly once (aip_incdir=${aip_incdir_count} aip_pkg=${aip_count} aip_refs=${aip_reference_count} env=${env_count} common_include=${common_include_count} common_pkg=${package_count} adapter=${adapter_count})"
                 return 1
             fi
-            aip_line=$(grep -nFx '$AIP_HOME/aip_core/aip_core_pkg.sv' "${tb_file}" \
+            aip_incdir_line=$(grep -nFx "${aip_filelist_sources[0]}" "${tb_file}" \
+                | cut -d: -f1)
+            aip_line=$(grep -nFx "${aip_filelist_sources[1]}" "${tb_file}" \
                 | cut -d: -f1)
             env_line=$(grep -nE \
                 '^[[:space:]]*-F[[:space:]]+\./env\.f[[:space:]]*$' \
                 "${tb_file}" | cut -d: -f1)
             package_line=$(grep -nFx './common_lib_pkg.sv' "${common_file}" \
                 | cut -d: -f1)
-            subscriber_line=$(grep -nFx './aip_activity_subscriber.sv' \
-                "${common_file}" | cut -d: -f1)
             adapter_line=$(grep -nFx './common_scb_aip_adapter.sv' "${common_file}" \
                 | cut -d: -f1)
-            if [[ ${aip_line} -ge ${env_line} \
-                    || ${package_line} -ge ${subscriber_line} \
-                    || ${subscriber_line} -ge ${adapter_line} ]]; then
+            if [[ ${aip_incdir_line} -ge ${aip_line} \
+                    || ${aip_line} -ge ${env_line} \
+                    || ${package_line} -ge ${adapter_line} ]]; then
                 fail "${label}: AIP package/adapter compile order is invalid"
                 return 1
             fi
@@ -494,22 +501,35 @@ advance_off=$(realpath -- "$1")
 advance_on=$(realpath -- "$2")
 port_off=$(realpath -- "$3")
 port_on=$(realpath -- "$4")
-aip_home=$(realpath -- "$5")
-aip_core_dir="${aip_home}/aip_core"
-tcl_script=$(realpath -- "$6")
-
-if [[ ! -f "${aip_core_dir}/aip_core_pkg.sv" \
-        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
-    fail "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}"
+requested_aip_home=$5
+if [[ ! -d ${requested_aip_home} ]] \
+        || ! aip_home=$(realpath -- "${requested_aip_home}" 2>/dev/null); then
+    printf 'generated scoreboard matrix: AIP_HOME does not contain a reviewed aip_core checkout: %s\n' \
+        "${requested_aip_home}" >&2
     exit 2
 fi
+aip_core_dir="${aip_home}/aip_core"
+
 export AIP_HOME="${aip_home}"
 aip_compile_sources=(
     "+incdir+${AIP_HOME}/aip_core"
     "${AIP_HOME}/aip_core/aip_core_pkg.sv"
 )
+aip_filelist_sources=(
+    "${aip_compile_sources[0]/${AIP_HOME}/\$AIP_HOME}"
+    "${aip_compile_sources[1]/${AIP_HOME}/\$AIP_HOME}"
+)
+if [[ ! -d ${aip_compile_sources[0]#+incdir+} \
+        || ! -f ${aip_compile_sources[1]} \
+        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
+    printf 'generated scoreboard matrix: AIP_HOME does not contain a reviewed aip_core checkout: %s\n' \
+        "${aip_home}" >&2
+    exit 2
+fi
+tcl_script=$(realpath -- "$6")
 if [[ ! -f ${tcl_script} ]]; then
-    fail "Tcl smoke script not found: ${tcl_script}"
+    printf 'generated scoreboard matrix: Tcl smoke script not found: %s\n' \
+        "${tcl_script}" >&2
     exit 2
 fi
 

@@ -291,23 +291,81 @@ def test_aip_runners_use_installation_root_contract():
     standalone = SCB_ADAPTER_RUNNER.read_text(encoding="utf-8")
 
     for runner in (runtime, matrix):
-        assert 'aip_home=$(realpath -- "$5")' in runner
         assert 'aip_core_dir="${aip_home}/aip_core"' in runner
         assert 'export AIP_HOME="${aip_home}"' in runner
-        assert '"+incdir+${AIP_HOME}/aip_core"' in runner
-        assert '"${AIP_HOME}/aip_core/aip_core_pkg.sv"' in runner
-        assert '"${aip_core_dir}/aip_core_pkg.sv"' in runner
-        assert '"${aip_core_dir}/aip_cmd.tcl"' in runner
 
-    assert 'aip_home=$(realpath -- "$2")' in standalone
     assert 'aip_core_dir="${aip_home}/aip_core"' in standalone
     assert 'export AIP_HOME="${aip_home}"' in standalone
     assert '"${aip_compile_sources[@]}"' in standalone
-    assert '"${aip_core_dir}/aip_core_pkg.sv"' in standalone
-    assert '"${aip_core_dir}/aip_cmd.tcl"' in standalone
 
     for runner in (runtime, matrix, standalone):
         assert "AIP_CORE_HOME" not in runner
+
+
+def aip_runner_invocations(
+    tmp_path: Path, aip_home: Path
+) -> dict[str, list[Path]]:
+    projects = []
+    for label in ("advance_off", "advance_on", "port_off", "port_on"):
+        project = tmp_path / label
+        (project / "cfg").mkdir(parents=True)
+        projects.append(project)
+
+    standalone_project = tmp_path / "standalone"
+    (standalone_project / "common").mkdir(parents=True)
+    (standalone_project / "common/common_lib_pkg.f").write_text(
+        "# test stub\n", encoding="utf-8"
+    )
+    (standalone_project / "common/common_scb_aip_adapter.sv").write_text(
+        "// test stub\n", encoding="utf-8"
+    )
+    adapter_tb = tmp_path / "adapter_tb.sv"
+    adapter_tb.write_text("module adapter_tb; endmodule\n", encoding="utf-8")
+    tcl_script = tmp_path / "smoke.tcl"
+    tcl_script.write_text("# test stub\n", encoding="utf-8")
+
+    return {
+        "runtime": [AIP_RUNTIME_RUNNER, *projects, aip_home],
+        "matrix": [
+            GENERATED_SCB_MATRIX_RUNNER,
+            *projects,
+            aip_home,
+            tcl_script,
+        ],
+        "standalone": [
+            SCB_ADAPTER_RUNNER,
+            standalone_project,
+            aip_home,
+            adapter_tb,
+        ],
+    }
+
+
+@pytest.mark.parametrize("runner_label", ["runtime", "matrix", "standalone"])
+@pytest.mark.parametrize("root_kind", ["missing", "invalid"])
+def test_aip_runners_reject_invalid_installation_root_cleanly(
+    tmp_path, root_kind, runner_label
+):
+    aip_home = (
+        tmp_path / "missing-parent" / "aip_home"
+        if root_kind == "missing"
+        else tmp_path / root_kind
+    )
+    if root_kind == "invalid":
+        aip_home.mkdir()
+
+    invocation = aip_runner_invocations(tmp_path, aip_home)[runner_label]
+    completed = subprocess.run(
+        [str(argument) for argument in invocation],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert "AIP_HOME" in completed.stderr
+    assert str(aip_home) in completed.stderr
+    assert "realpath:" not in completed.stderr
+    assert "No such file or directory" not in completed.stderr
 
 
 def test_generated_scb_matrix_validator_rejects_runtime_mutations(tmp_path):
@@ -533,16 +591,17 @@ def test_generated_scb_matrix_rejects_nested_aip_leak_in_off_project(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "duplicate_entry"),
+    ("relative_path", "duplicate_entry", "expected_count"),
     (
-        ("cfg/tb.f", "$AIP_HOME/aip_core/aip_core_pkg.sv"),
-        ("cfg/env.f", "-F  ../common/common_lib_pkg.f"),
-        ("common/common_lib_pkg.f", "./common_scb_aip_adapter.sv"),
+        ("cfg/tb.f", "$AIP_HOME/aip_core/aip_core_pkg.sv", "aip_pkg=2"),
+        ("cfg/tb.f", "+incdir+$AIP_HOME/aip_core", "aip_incdir=2"),
+        ("cfg/env.f", "-F  ../common/common_lib_pkg.f", "common_include=2"),
+        ("common/common_lib_pkg.f", "./common_scb_aip_adapter.sv", "adapter=2"),
     ),
-    ids=("aip-package", "common-include", "adapter"),
+    ids=("aip-package", "aip-incdir", "common-include", "adapter"),
 )
 def test_generated_scb_matrix_rejects_duplicate_aip_order_entries(
-    tmp_path, relative_path, duplicate_entry
+    tmp_path, relative_path, duplicate_entry, expected_count
 ):
     matrix_root = tmp_path / "duplicate matrix with spaces"
     projects = {}
@@ -597,7 +656,95 @@ def test_generated_scb_matrix_rejects_duplicate_aip_order_entries(
     assert "advance_on: AIP-on filelist entries must appear exactly once" in (
         completed.stderr
     )
+    assert expected_count in completed.stderr
     assert "syntax error in expression" not in completed.stderr
+    assert "unexpected compile reached" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("replacement", "mutation"),
+    (
+        ("", "missing"),
+        ("+incdir+$AIP_HOME\n", "incorrect"),
+        (
+            "+incdir+$AIP_CORE_HOME/aip_core\n",
+            "old-variable",
+        ),
+        (None, "wrong-order"),
+    ),
+    ids=("missing", "incorrect", "old-variable", "wrong-order"),
+)
+def test_generated_scb_matrix_rejects_aip_incdir_mutations(
+    tmp_path, replacement, mutation
+):
+    matrix_root = tmp_path / f"{mutation} incdir matrix"
+    projects = {}
+    for label, platform, aip_core in (
+        ("advance_off", PlatformType.ADVANCE, False),
+        ("advance_on", PlatformType.ADVANCE, True),
+        ("port_off", PlatformType.PORT, False),
+        ("port_on", PlatformType.PORT, True),
+    ):
+        output = matrix_root / label
+        output.mkdir(parents=True)
+        projects[label] = generate(output, platform, aip_core)
+
+    tb_file = projects["advance_on"] / "cfg/tb.f"
+    original_incdir = "+incdir+$AIP_HOME/aip_core\n"
+    package_line = "$AIP_HOME/aip_core/aip_core_pkg.sv\n"
+    original = tb_file.read_text(encoding="utf-8")
+    assert original.count(original_incdir) == 1
+    if mutation == "wrong-order":
+        original_pair = original_incdir + package_line
+        assert original.count(original_pair) == 1
+        mutated = original.replace(
+            original_pair, package_line + original_incdir, 1
+        )
+    else:
+        mutated = original.replace(original_incdir, replacement, 1)
+    tb_file.write_text(mutated, encoding="utf-8")
+
+    aip_home = make_aip_installation(tmp_path / "AIP installation")
+    tcl_script = tmp_path / "smoke script.tcl"
+    tcl_script.write_text("# test stub\n", encoding="utf-8")
+    stub_bin = tmp_path / "stub bin"
+    stub_bin.mkdir()
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        echo "unexpected compile reached" >&2
+        exit 93
+        """,
+    )
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:{environment['PATH']}"
+
+    completed = subprocess.run(
+        [
+            str(GENERATED_SCB_MATRIX_RUNNER),
+            *(str(projects[label]) for label in (
+                "advance_off", "advance_on", "port_off", "port_on"
+            )),
+            str(aip_home),
+            str(tcl_script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    if mutation == "wrong-order":
+        assert "advance_on: AIP package/adapter compile order is invalid" in (
+            completed.stderr
+        )
+    else:
+        assert "advance_on: AIP-on filelist entries must appear exactly once" in (
+            completed.stderr
+        )
+        assert "aip_incdir=0" in completed.stderr
     assert "unexpected compile reached" not in completed.stderr
 
 

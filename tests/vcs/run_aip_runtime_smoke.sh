@@ -214,24 +214,29 @@ advance_off=$1
 advance_on=$2
 port_off=$3
 port_on=$4
-aip_home=$(realpath -- "$5")
+requested_aip_home=$5
+if [[ ! -d ${requested_aip_home} ]] \
+        || ! aip_home=$(realpath -- "${requested_aip_home}" 2>/dev/null); then
+    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${requested_aip_home}" >&2
+    exit 2
+fi
 aip_core_dir="${aip_home}/aip_core"
 
 if [[ ${aip_home} =~ [[:space:]] ]]; then
     echo 'AIP_HOME must not contain whitespace' >&2
     exit 2
 fi
-if [[ ! -f "${aip_core_dir}/aip_core_pkg.sv" \
-        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
-    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}" >&2
-    exit 2
-fi
-
 export AIP_HOME="${aip_home}"
 aip_compile_sources=(
     "+incdir+${AIP_HOME}/aip_core"
     "${AIP_HOME}/aip_core/aip_core_pkg.sv"
 )
+if [[ ! -d ${aip_compile_sources[0]#+incdir+} \
+        || ! -f ${aip_compile_sources[1]} \
+        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
+    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}" >&2
+    exit 2
+fi
 
 compile_and_run_base() {
     local project_dir=$1

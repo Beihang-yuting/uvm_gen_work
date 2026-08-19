@@ -829,7 +829,6 @@ def test_aip_adapter_vcs_behavioral_assets_cover_runtime_contract():
     assert "UVM_(ERROR|FATAL)" in runner
     assert r"\[ERROR\]" in runner
     assert "aip_core_pkg.sv" in runner
-    assert 'aip_home=$(realpath -- "$2")' in runner
     assert 'aip_core_dir="${aip_home}/aip_core"' in runner
     assert 'export AIP_HOME="${aip_home}"' in runner
     assert '"${aip_compile_sources[@]}"' in runner
