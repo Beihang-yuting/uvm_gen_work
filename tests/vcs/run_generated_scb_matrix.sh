@@ -5,7 +5,7 @@ readonly scoreboard_path='uvm_test_top.m_env.m_scb.m_axi_scb'
 
 usage() {
     cat >&2 <<EOF
-Usage: $0 ADVANCE_OFF ADVANCE_ON PORT_OFF PORT_ON AIP_CORE_HOME TCL_SCRIPT
+Usage: $0 ADVANCE_OFF ADVANCE_ON PORT_OFF PORT_ON AIP_HOME TCL_SCRIPT
        $0 --validate-log {base|tcl} LABEL LOG
 EOF
 }
@@ -320,7 +320,7 @@ validate_project() {
                 fail "${label}: AIP-off project contains AIP runtime assets"
                 return 1
             fi
-            if grep -Fq '$AIP_CORE_HOME' "${tb_file}" \
+            if grep -Fq '$AIP_HOME' "${tb_file}" \
                     || grep -Fq 'common_scb_aip_adapter.sv' "${common_file}"; then
                 fail "${label}: AIP-off filelist contains AIP tokens"
                 return 1
@@ -332,7 +332,7 @@ validate_project() {
                 fail "${label}: AIP-on project is missing adapter/Tcl test"
                 return 1
             fi
-            aip_count=$(grep -Fxc '$AIP_CORE_HOME/aip_core_pkg.sv' \
+            aip_count=$(grep -Fxc '$AIP_HOME/aip_core/aip_core_pkg.sv' \
                 "${tb_file}" || true)
             env_count=$(grep -Ec \
                 '^[[:space:]]*-F[[:space:]]+\./env\.f[[:space:]]*$' \
@@ -352,7 +352,7 @@ validate_project() {
                 fail "${label}: AIP-on filelist entries must appear exactly once (aip_pkg=${aip_count} env=${env_count} common_include=${common_include_count} common_pkg=${package_count} subscriber=${subscriber_count} adapter=${adapter_count})"
                 return 1
             fi
-            aip_line=$(grep -nFx '$AIP_CORE_HOME/aip_core_pkg.sv' "${tb_file}" \
+            aip_line=$(grep -nFx '$AIP_HOME/aip_core/aip_core_pkg.sv' "${tb_file}" \
                 | cut -d: -f1)
             env_line=$(grep -nE \
                 '^[[:space:]]*-F[[:space:]]+\./env\.f[[:space:]]*$' \
@@ -397,9 +397,9 @@ compile_and_run_base() {
     (
         cd "${cfg_dir}"
         if [[ ${aip_enabled} == true ]]; then
-            export AIP_CORE_HOME="${aip_core_home}"
+            export AIP_HOME="${aip_home}"
         else
-            unset AIP_CORE_HOME
+            unset AIP_HOME
         fi
         rm -f -- "${simv}" "${compile_log}" "${compile_console}" \
             "${run_log}" "${run_console}"
@@ -456,7 +456,7 @@ run_adapter_smoke() {
 
     (
         cd "${cfg_dir}"
-        export AIP_CORE_HOME="${aip_core_home}"
+        export AIP_HOME="${aip_home}"
         rm -f -- "${run_log}" "${run_console}"
         if timeout --kill-after=10s 90s \
                 "./${simv}" +UVM_TESTNAME=tc_tcl +UVM_PHASE_TRACE \
@@ -494,14 +494,20 @@ advance_off=$(realpath -- "$1")
 advance_on=$(realpath -- "$2")
 port_off=$(realpath -- "$3")
 port_on=$(realpath -- "$4")
-aip_core_home=$(realpath -- "$5")
+aip_home=$(realpath -- "$5")
+aip_core_dir="${aip_home}/aip_core"
 tcl_script=$(realpath -- "$6")
 
-if [[ ! -f ${aip_core_home}/aip_core_pkg.sv \
-        || ! -f ${aip_core_home}/aip_cmd.tcl ]]; then
-    fail "AIP_CORE_HOME is not a reviewed AIP Core checkout: ${aip_core_home}"
+if [[ ! -f "${aip_core_dir}/aip_core_pkg.sv" \
+        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
+    fail "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}"
     exit 2
 fi
+export AIP_HOME="${aip_home}"
+aip_compile_sources=(
+    "+incdir+${AIP_HOME}/aip_core"
+    "${AIP_HOME}/aip_core/aip_core_pkg.sv"
+)
 if [[ ! -f ${tcl_script} ]]; then
     fail "Tcl smoke script not found: ${tcl_script}"
     exit 2

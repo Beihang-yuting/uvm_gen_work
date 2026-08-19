@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<EOF
-Usage: $0 ADVANCE_OFF ADVANCE_ON PORT_OFF PORT_ON AIP_CORE_DIR
+Usage: $0 ADVANCE_OFF ADVANCE_ON PORT_OFF PORT_ON AIP_HOME
        $0 --validate-log {base|tcl} LABEL LOG
        $0 --validate-compile LABEL COMPILE_LOG CONSOLE_LOG
 EOF
@@ -214,14 +214,24 @@ advance_off=$1
 advance_on=$2
 port_off=$3
 port_on=$4
-aip_core_dir=$5
+aip_home=$(realpath -- "$5")
+aip_core_dir="${aip_home}/aip_core"
 
-if [[ ${aip_core_dir} =~ [[:space:]] ]]; then
-    echo 'AIP_CORE_DIR must not contain whitespace' >&2
+if [[ ${aip_home} =~ [[:space:]] ]]; then
+    echo 'AIP_HOME must not contain whitespace' >&2
+    exit 2
+fi
+if [[ ! -f "${aip_core_dir}/aip_core_pkg.sv" \
+        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
+    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}" >&2
     exit 2
 fi
 
-export AIP_CORE_HOME="${aip_core_dir}"
+export AIP_HOME="${aip_home}"
+aip_compile_sources=(
+    "+incdir+${AIP_HOME}/aip_core"
+    "${AIP_HOME}/aip_core/aip_core_pkg.sv"
+)
 
 compile_and_run_base() {
     local project_dir=$1

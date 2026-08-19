@@ -13,6 +13,7 @@ from uvm_gen.generators.platform import PlatformGenerator
 REPOSITORY = Path(__file__).resolve().parents[1]
 GENERATED_SCB_MATRIX_RUNNER = REPOSITORY / "tests/vcs/run_generated_scb_matrix.sh"
 AIP_RUNTIME_RUNNER = REPOSITORY / "tests/vcs/run_aip_runtime_smoke.sh"
+SCB_ADAPTER_RUNNER = REPOSITORY / "tests/vcs/run_common_scb_aip_adapter.sh"
 SCB_ADAPTER_SMOKE_TCL = REPOSITORY / "tests/vcs/scb_adapter_smoke.tcl"
 SCOREBOARD_PATH = "uvm_test_top.m_env.m_scb.m_axi_scb"
 
@@ -44,6 +45,18 @@ def read(project_dir: Path, relative_path: str) -> str:
 def write_executable(path: Path, contents: str) -> None:
     path.write_text(textwrap.dedent(contents), encoding="utf-8")
     path.chmod(0o755)
+
+
+def make_aip_installation(aip_home: Path) -> Path:
+    aip_core_dir = aip_home / "aip_core"
+    aip_core_dir.mkdir(parents=True)
+    (aip_core_dir / "aip_core_pkg.sv").write_text(
+        "package aip_core_pkg; endpackage\n", encoding="utf-8"
+    )
+    (aip_core_dir / "aip_cmd.tcl").write_text(
+        "# test stub\n", encoding="utf-8"
+    )
+    return aip_home
 
 
 def assert_in_order(text: str, *snippets: str) -> None:
@@ -204,6 +217,8 @@ def test_tcl_demo_uses_ucli_input_script(tmp_path, platform_type):
         "+UVM_TESTNAME=tc_tcl"
     ) in tcl_demo
     assert "-do" not in tcl_demo
+    assert "source $env(AIP_HOME)/aip_core/aip_cmd.tcl" in tcl_demo
+    assert "AIP_CORE_HOME" not in tcl_demo
     executable_lines = [
         line.strip()
         for line in tcl_demo.splitlines()
@@ -248,10 +263,14 @@ def test_generated_scb_matrix_assets_cover_runtime_contract():
         "SCB_ADAPTER_SMOKE",
         SCOREBOARD_PATH,
         "validate_aip_off_tree",
-        "unset AIP_CORE_HOME",
+        "unset AIP_HOME",
         "trap cleanup_normalized_log EXIT",
     ):
         assert contract in runner
+
+    assert "source $env(AIP_HOME)/aip_core/aip_cmd.tcl" in smoke
+    assert "AIP_CORE_HOME" not in runner
+    assert "AIP_CORE_HOME" not in smoke
 
     for invocation in (
         "scb_list",
@@ -264,6 +283,31 @@ def test_generated_scb_matrix_assets_cover_runtime_contract():
     assert smoke.count('puts "SCB_ADAPTER_SMOKE command=') == 5
     assert "scb_clear" not in smoke
     assert "reset_state" not in smoke
+
+
+def test_aip_runners_use_installation_root_contract():
+    runtime = AIP_RUNTIME_RUNNER.read_text(encoding="utf-8")
+    matrix = GENERATED_SCB_MATRIX_RUNNER.read_text(encoding="utf-8")
+    standalone = SCB_ADAPTER_RUNNER.read_text(encoding="utf-8")
+
+    for runner in (runtime, matrix):
+        assert 'aip_home=$(realpath -- "$5")' in runner
+        assert 'aip_core_dir="${aip_home}/aip_core"' in runner
+        assert 'export AIP_HOME="${aip_home}"' in runner
+        assert '"+incdir+${AIP_HOME}/aip_core"' in runner
+        assert '"${AIP_HOME}/aip_core/aip_core_pkg.sv"' in runner
+        assert '"${aip_core_dir}/aip_core_pkg.sv"' in runner
+        assert '"${aip_core_dir}/aip_cmd.tcl"' in runner
+
+    assert 'aip_home=$(realpath -- "$2")' in standalone
+    assert 'aip_core_dir="${aip_home}/aip_core"' in standalone
+    assert 'export AIP_HOME="${aip_home}"' in standalone
+    assert '"${aip_compile_sources[@]}"' in standalone
+    assert '"${aip_core_dir}/aip_core_pkg.sv"' in standalone
+    assert '"${aip_core_dir}/aip_cmd.tcl"' in standalone
+
+    for runner in (runtime, matrix, standalone):
+        assert "AIP_CORE_HOME" not in runner
 
 
 def test_generated_scb_matrix_validator_rejects_runtime_mutations(tmp_path):
@@ -449,10 +493,7 @@ def test_generated_scb_matrix_rejects_nested_aip_leak_in_off_project(tmp_path):
         encoding="utf-8",
     )
 
-    aip_core_dir = tmp_path / "aip core"
-    aip_core_dir.mkdir()
-    (aip_core_dir / "aip_core_pkg.sv").write_text("package aip_core_pkg; endpackage\n")
-    (aip_core_dir / "aip_cmd.tcl").write_text("# test stub\n")
+    aip_home = make_aip_installation(tmp_path / "AIP installation")
     tcl_script = tmp_path / "smoke script.tcl"
     tcl_script.write_text("# test stub\n")
 
@@ -475,7 +516,7 @@ def test_generated_scb_matrix_rejects_nested_aip_leak_in_off_project(tmp_path):
             *(str(projects[label]) for label in (
                 "advance_off", "advance_on", "port_off", "port_on"
             )),
-            str(aip_core_dir),
+            str(aip_home),
             str(tcl_script),
         ],
         check=False,
@@ -494,7 +535,7 @@ def test_generated_scb_matrix_rejects_nested_aip_leak_in_off_project(tmp_path):
 @pytest.mark.parametrize(
     ("relative_path", "duplicate_entry"),
     (
-        ("cfg/tb.f", "$AIP_CORE_HOME/aip_core_pkg.sv"),
+        ("cfg/tb.f", "$AIP_HOME/aip_core/aip_core_pkg.sv"),
         ("cfg/env.f", "-F  ../common/common_lib_pkg.f"),
         ("common/common_lib_pkg.f", "./common_scb_aip_adapter.sv"),
     ),
@@ -521,10 +562,7 @@ def test_generated_scb_matrix_rejects_duplicate_aip_order_entries(
         encoding="utf-8",
     )
 
-    aip_core_dir = tmp_path / "aip core"
-    aip_core_dir.mkdir()
-    (aip_core_dir / "aip_core_pkg.sv").write_text("package aip_core_pkg; endpackage\n")
-    (aip_core_dir / "aip_cmd.tcl").write_text("# test stub\n")
+    aip_home = make_aip_installation(tmp_path / "AIP installation")
     tcl_script = tmp_path / "smoke script.tcl"
     tcl_script.write_text("# test stub\n")
 
@@ -546,7 +584,7 @@ def test_generated_scb_matrix_rejects_duplicate_aip_order_entries(
             *(str(projects[label]) for label in (
                 "advance_off", "advance_on", "port_off", "port_on"
             )),
-            str(aip_core_dir),
+            str(aip_home),
             str(tcl_script),
         ],
         check=False,
@@ -744,8 +782,7 @@ def test_vcs_runtime_gate_rejects_zero_exit_compile_diagnostic(tmp_path):
     for project_dir in projects.values():
         (project_dir / "cfg").mkdir(parents=True)
 
-    aip_core_dir = tmp_path / "aip_core"
-    aip_core_dir.mkdir()
+    aip_home = make_aip_installation(tmp_path / "aip_home")
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     write_executable(
@@ -807,7 +844,7 @@ def test_vcs_runtime_gate_rejects_zero_exit_compile_diagnostic(tmp_path):
             "bash",
             str(AIP_RUNTIME_RUNNER),
             *(str(projects[label]) for label in labels),
-            str(aip_core_dir),
+            str(aip_home),
         ],
         check=False,
         capture_output=True,
@@ -847,8 +884,7 @@ def test_vcs_runtime_gate_requires_fresh_executable(tmp_path):
     for project_dir in projects.values():
         (project_dir / "cfg").mkdir(parents=True)
 
-    aip_core_dir = tmp_path / "aip_core"
-    aip_core_dir.mkdir()
+    aip_home = make_aip_installation(tmp_path / "aip_home")
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     write_executable(
@@ -893,7 +929,7 @@ def test_vcs_runtime_gate_requires_fresh_executable(tmp_path):
             "bash",
             str(AIP_RUNTIME_RUNNER),
             *(str(projects[label]) for label in labels),
-            str(aip_core_dir),
+            str(aip_home),
         ],
         check=False,
         capture_output=True,
@@ -914,8 +950,7 @@ def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
     for project_dir in projects.values():
         (project_dir / "cfg").mkdir(parents=True)
 
-    aip_core_dir = tmp_path / "aip_core"
-    aip_core_dir.mkdir()
+    aip_home = make_aip_installation(tmp_path / "aip_home")
     calls_dir = tmp_path / "vcs_calls"
     calls_dir.mkdir()
     stub_bin = tmp_path / "stub_bin"
@@ -989,7 +1024,7 @@ def test_vcs_runtime_gate_enables_compile_flags_for_aip_only(tmp_path):
             "bash",
             str(runtime_gate),
             *(str(projects[label]) for label in labels),
-            str(aip_core_dir),
+            str(aip_home),
         ],
         check=False,
         capture_output=True,
@@ -1029,6 +1064,7 @@ def test_vcs_runtime_gate_rejects_invalid_aip_compile_flag(tmp_path):
     )
     test_runtime_gate = tmp_path / "run_aip_runtime_smoke.sh"
     write_executable(test_runtime_gate, runtime_gate)
+    aip_home = make_aip_installation(tmp_path / "aip_home")
 
     completed = subprocess.run(
         [
@@ -1038,7 +1074,7 @@ def test_vcs_runtime_gate_rejects_invalid_aip_compile_flag(tmp_path):
             str(tmp_path / "advance_on"),
             str(tmp_path / "port_off"),
             str(tmp_path / "port_on"),
-            str(tmp_path / "aip_core"),
+            str(aip_home),
         ],
         check=False,
         capture_output=True,
@@ -1072,11 +1108,18 @@ def test_aip_tb_file_keeps_core_package_entries(tmp_path, platform_type):
     aip_home_lines = [
         line.strip()
         for line in tb_file.splitlines()
-        if line.strip() and "$AIP_CORE_HOME" in line
+        if line.strip() and "$AIP_HOME" in line
     ]
     assert aip_home_lines == [
-        "+incdir+$AIP_CORE_HOME",
-        "$AIP_CORE_HOME/aip_core_pkg.sv",
+        "+incdir+$AIP_HOME/aip_core",
+        "$AIP_HOME/aip_core/aip_core_pkg.sv",
     ]
     assert tb_file.count("aip_core_pkg.sv") == 1
     assert not list(project_dir.rglob("aip_core_pkg.sv"))
+
+    generated_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(project_dir.rglob("*"))
+        if path.is_file()
+    )
+    assert "AIP_CORE_HOME" not in generated_text

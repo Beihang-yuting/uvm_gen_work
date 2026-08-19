@@ -710,7 +710,7 @@ def test_aip_adapter_is_compiled_after_its_dependencies(tmp_path, platform_type)
     )
 
     tb_filelist = read(project, "cfg/tb.f")
-    assert tb_filelist.index("$AIP_CORE_HOME/aip_core_pkg.sv") < (
+    assert tb_filelist.index("$AIP_HOME/aip_core/aip_core_pkg.sv") < (
         tb_filelist.index("-F   ./env.f")
     )
 
@@ -829,6 +829,12 @@ def test_aip_adapter_vcs_behavioral_assets_cover_runtime_contract():
     assert "UVM_(ERROR|FATAL)" in runner
     assert r"\[ERROR\]" in runner
     assert "aip_core_pkg.sv" in runner
+    assert 'aip_home=$(realpath -- "$2")' in runner
+    assert 'aip_core_dir="${aip_home}/aip_core"' in runner
+    assert 'export AIP_HOME="${aip_home}"' in runner
+    assert '"${aip_compile_sources[@]}"' in runner
+    assert '"${aip_core_dir}/aip_cmd.tcl"' in runner
+    assert "AIP_CORE_HOME" not in runner
     assert "common_lib_pkg.f" in runner
 
 

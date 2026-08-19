@@ -1,7 +1,7 @@
 # Generated-project scoreboard AIP integration smoke.
-# Run from any generated cfg/ directory with tc_tcl and AIP_CORE_HOME set.
+# Run from any generated cfg/ directory with tc_tcl and AIP_HOME set.
 
-source $env(AIP_CORE_HOME)/aip_cmd.tcl
+source $env(AIP_HOME)/aip_core/aip_cmd.tcl
 
 set scb_path "uvm_test_top.m_env.m_scb.m_axi_scb"
 set scb_summary_pattern {^status=SCB_PASS expected=0 actual=0 match=0 mismatch=0 drop=0 unexpected=0 pending_expected=0 pending_actual=0 overflow=0 peak_pending=0 suppressed=0$}

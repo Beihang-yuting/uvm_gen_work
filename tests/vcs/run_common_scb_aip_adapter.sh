@@ -2,12 +2,13 @@
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
-    echo "Usage: $0 GENERATED_PROJECT AIP_CORE_DIR ADAPTER_TB_SV" >&2
+    echo "Usage: $0 GENERATED_PROJECT AIP_HOME ADAPTER_TB_SV" >&2
     exit 2
 fi
 
 project_dir=$(realpath -- "$1")
-aip_core_dir=$(realpath -- "$2")
+aip_home=$(realpath -- "$2")
+aip_core_dir="${aip_home}/aip_core"
 adapter_tb=$(realpath -- "$3")
 
 if [[ ! -f ${project_dir}/common/common_lib_pkg.f ]]; then
@@ -18,8 +19,9 @@ if [[ ! -f ${project_dir}/common/common_scb_aip_adapter.sv ]]; then
     echo "generated AIP adapter not found: ${project_dir}" >&2
     exit 2
 fi
-if [[ ! -f ${aip_core_dir}/aip_core_pkg.sv ]]; then
-    echo "aip_core_pkg.sv not found: ${aip_core_dir}" >&2
+if [[ ! -f "${aip_core_dir}/aip_core_pkg.sv" \
+        || ! -f "${aip_core_dir}/aip_cmd.tcl" ]]; then
+    echo "AIP_HOME does not contain a reviewed aip_core checkout: ${aip_home}" >&2
     exit 2
 fi
 if [[ ! -f ${adapter_tb} ]]; then
@@ -37,7 +39,11 @@ mkdir -p "${run_dir}/common"
 cp -R "${project_dir}/common/." "${run_dir}/common/"
 cp -- "${adapter_tb}" "${run_dir}/common/common_scb_aip_adapter_tb.sv"
 
-export AIP_CORE_HOME="${aip_core_dir}"
+export AIP_HOME="${aip_home}"
+aip_compile_sources=(
+    "+incdir+${AIP_HOME}/aip_core"
+    "${AIP_HOME}/aip_core/aip_core_pkg.sv"
+)
 compile_log="${run_dir}/compile.log"
 compile_console="${run_dir}/compile_console.log"
 run_log="${run_dir}/run.log"
@@ -48,7 +54,7 @@ if ! (
     timeout --kill-after=30s 600s \
         vcs -full64 -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps \
         -debug_access+all -lca \
-        "+incdir+${AIP_CORE_HOME}" "${AIP_CORE_HOME}/aip_core_pkg.sv" \
+        "${aip_compile_sources[@]}" \
         -F common_lib_pkg.f common_scb_aip_adapter_tb.sv \
         -top common_scb_aip_adapter_tb -o "${run_dir}/simv" \
         -l "${compile_log}"
