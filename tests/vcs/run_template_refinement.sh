@@ -40,15 +40,19 @@ fi
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/template-refinement.XXXXXX")
 cleanup() {
     local status=$?
+    local destination
     local failure_dir
     local log_file
+    local relative_path
 
     if [[ ${status} -ne 0 ]]; then
-        failure_dir="${TMPDIR:-/tmp}/template-refinement-failure.$$.logs"
-        mkdir -p -- "${failure_dir}"
+        failure_dir=$(mktemp -d \
+            "${TMPDIR:-/tmp}/template-refinement-failure.XXXXXX")
         while IFS= read -r -d '' log_file; do
-            cp -- "${log_file}" \
-                "${failure_dir}/$(basename "${log_file}")"
+            relative_path=${log_file#"${run_dir}/"}
+            destination="${failure_dir}/${relative_path}"
+            mkdir -p -- "$(dirname "${destination}")"
+            cp -- "${log_file}" "${destination}"
         done < <(find "${run_dir}" -type f \
             \( -name '*.log' -o -name '*.tcl' \) -print0)
         printf 'template refinement gate: failure logs preserved at %s\n' \
@@ -68,6 +72,105 @@ normalize_log() {
     local normalized_log=$2
     sed -E $'s/\033\\[[0-?]*[ -\\/]*[@-~]//g; s/\r$//' \
         -- "${source_log}" >"${normalized_log}"
+}
+
+has_infrastructure_diagnostic() {
+    local normalized_log=$1
+
+    grep -Eiq \
+        '\{\{|\{%|%\}|syntax error|undefined (macro|type)|invalid command name|no such file or directory|file not found|(cannot|unable|failed to) (open|read) (file|include)|cannot find (file|include)|internal (compiler )?(error|failure)|compiler internal error|FLEXlm.*(error|failure)|license.*(error|fail|denied|unavailable|expired)|(error|fail|denied|unavailable|expired).*license' \
+        "${normalized_log}"
+}
+
+validate_width_mismatch_logs() {
+    local primary_log=$1
+    local console_log=$2
+    local expected_error='Error-[CFCILFBI] Cannot find cell in liblist'
+    local log
+    local normalized
+    local primary_normalized
+    local unexpected
+
+    if [[ ! -s ${primary_log} || ! -s ${console_log} ]]; then
+        fail 'width mismatch compile did not produce both diagnostic logs'
+        return 1
+    fi
+    primary_normalized=$(mktemp "${run_dir}/width-primary.XXXXXX.log")
+    normalize_log "${primary_log}" "${primary_normalized}"
+    if [[ $(grep -Fxc "${expected_error}" "${primary_normalized}" || true) \
+            -ne 1 \
+            || $(grep -Ec \
+                "^[[:space:]]*Cell 'UVG_STATIC_ASSERTION_FAILED' cannot be found in liblist for binding[[:space:]]*$" \
+                "${primary_normalized}" || true) -ne 1 \
+            || $(grep -Ec \
+                "^[[:space:]]*instance '.*u_uvg_if_width_mismatch'\\.[[:space:]]*$" \
+                "${primary_normalized}" || true) -ne 1 ]]; then
+        fail 'width mismatch failed without the exact intentional CFCILFBI diagnostic'
+        return 1
+    fi
+
+    for log in "${primary_log}" "${console_log}"; do
+        normalized=$(mktemp "${run_dir}/width-diagnostic.XXXXXX.log")
+        normalize_log "${log}" "${normalized}"
+        unexpected=$(grep -E 'Error-\[[^]]+\]' "${normalized}" \
+            | grep -Ev \
+                '^Error-\[CFCILFBI\] Cannot find cell in liblist[[:space:]]*$' \
+            || true)
+        if [[ -n ${unexpected} ]] \
+                || has_infrastructure_diagnostic "${normalized}"; then
+            fail "unexpected width mismatch diagnostic: ${log}"
+            grep -E \
+                'Error-\[[^]]+\]|syntax error|undefined (macro|type)|invalid command name|no such file|file not found|internal|license' \
+                "${normalized}" >&2 || true
+            return 1
+        fi
+    done
+}
+
+validate_missing_vif_logs() {
+    local primary_log=$1
+    local console_log=$2
+    local expected_fatal_re='^UVM_FATAL .* \[UVG_VIF_GET\] .*field=m_vif[[:space:]]*$'
+    local allowed_uvm_re
+    local log
+    local normalized
+    local primary_normalized
+    local unexpected
+
+    allowed_uvm_re="${expected_fatal_re}|^UVM_ERROR[[:space:]]*:[[:space:]]*0[[:space:]]*$|^UVM_FATAL[[:space:]]*:[[:space:]]*1[[:space:]]*$"
+    if [[ ! -s ${primary_log} || ! -s ${console_log} ]]; then
+        fail 'missing VIF leg did not produce both diagnostic logs'
+        return 1
+    fi
+    primary_normalized=$(mktemp "${run_dir}/missing-vif-primary.XXXXXX.log")
+    normalize_log "${primary_log}" "${primary_normalized}"
+    if [[ $(grep -Ec "${expected_fatal_re}" "${primary_normalized}" || true) \
+            -ne 1 \
+            || $(grep -Ec \
+                '^UVM_ERROR[[:space:]]*:[[:space:]]*0[[:space:]]*$' \
+                "${primary_normalized}" || true) -ne 1 \
+            || $(grep -Ec \
+                '^UVM_FATAL[[:space:]]*:[[:space:]]*1[[:space:]]*$' \
+                "${primary_normalized}" || true) -ne 1 ]]; then
+        fail 'missing VIF leg did not contain the exact expected fatal/summary'
+        return 1
+    fi
+
+    for log in "${primary_log}" "${console_log}"; do
+        normalized=$(mktemp "${run_dir}/missing-vif-diagnostic.XXXXXX.log")
+        normalize_log "${log}" "${normalized}"
+        unexpected=$(grep -E '^UVM_(FATAL|ERROR)' "${normalized}" \
+            | grep -Ev "${allowed_uvm_re}" || true)
+        if [[ -n ${unexpected} ]] \
+                || grep -Eq 'Error-\[[^]]+\]' "${normalized}" \
+                || has_infrastructure_diagnostic "${normalized}"; then
+            fail "unexpected missing VIF diagnostic: ${log}"
+            grep -E \
+                '^UVM_(FATAL|ERROR)|Error-\[[^]]+\]|syntax error|undefined (macro|type)|invalid command name|no such file|file not found|internal|license' \
+                "${normalized}" >&2 || true
+            return 1
+        fi
+    done
 }
 
 reject_bad_log() {
@@ -190,19 +293,16 @@ timeout --kill-after=30s 600s vcs \
     >compile_bad_width_console.log 2>&1
 bad_width_status=$?
 set -e
+if [[ ${bad_width_status} -eq 124 || ${bad_width_status} -eq 137 ]]; then
+    fail "width mismatch compile timed out (exit ${bad_width_status})"
+    exit 1
+fi
 if [[ ${bad_width_status} -eq 0 ]]; then
     fail 'width mismatch unexpectedly elaborated'
     exit 1
 fi
-if ! grep -Eq \
-        'UVG_STATIC_ASSERTION_FAILED|u_uvg_if_width_mismatch' \
+if ! validate_width_mismatch_logs \
         compile_bad_width.log compile_bad_width_console.log; then
-    fail 'width mismatch failed without the intentional assertion module'
-    exit 1
-fi
-if grep -Eiq '\{\{|\{%|%\}|syntax error|undefined (macro|type)' \
-        compile_bad_width.log compile_bad_width_console.log; then
-    fail 'width mismatch compile exposed an unrelated diagnostic'
     exit 1
 fi
 
@@ -217,9 +317,8 @@ if [[ ${missing_vif_status} -eq 124 || ${missing_vif_status} -eq 137 ]]; then
     fail "missing VIF leg timed out (exit ${missing_vif_status})"
     exit 1
 fi
-if ! grep -Eq 'UVG_VIF_GET.*field=m_vif' \
+if ! validate_missing_vif_logs \
         run_missing_vif.log run_missing_vif_console.log; then
-    fail 'missing VIF leg did not identify UVG_VIF_GET field=m_vif'
     exit 1
 fi
 if grep -Fq TEMPLATE_REFINEMENT_VCS_PASS \

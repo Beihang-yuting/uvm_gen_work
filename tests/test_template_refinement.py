@@ -1161,9 +1161,254 @@ def test_template_refinement_vcs_assets_cover_semantics():
     assert "124" in missing_vif_leg
     assert "137" in missing_vif_leg
 
+    width_status_check = script[
+        script.index("bad_width_status=$?") :
+        script.index("fsdb_native=false")
+    ]
+    assert "bad_width_status" in width_status_check
+    assert "124" in width_status_check
+    assert "137" in width_status_check
+    assert "CFCILFBI" in script
+
+    cleanup = script[script.index("cleanup() {") : script.index("trap cleanup EXIT")]
+    assert "mktemp -d" in cleanup
+    assert "template-refinement-failure.XXXXXX" in cleanup
+    assert "template-refinement-failure.$$.logs" not in cleanup
+    assert '${log_file#"${run_dir}/"}' in cleanup
+
     stale_wave_removal = script.index("rm -f -- wave.fsdb")
     wave_runtime = script.index("./simv_xprop +UVM_TESTNAME=tc_base")
     assert stale_wave_removal < wave_runtime
+
+
+def run_synthetic_template_refinement_gate(
+    tmp_path: Path,
+    *,
+    width_status: int = 255,
+    width_primary_extra: str = "",
+    width_console_extra: str = "",
+    missing_primary_extra: str = "",
+    missing_console_extra: str = "",
+    duplicate_failure_logs: bool = False,
+) -> tuple[subprocess.CompletedProcess, Path]:
+    runner = REPOSITORY / "tests/vcs/run_template_refinement.sh"
+    project = tmp_path / "project"
+    cfg = project / "cfg"
+    cfg.mkdir(parents=True)
+    (cfg / "tb.f").write_text("# synthetic filelist\n", encoding="utf-8")
+    (cfg / "wave.tcl").write_text(
+        'fsdbDumpfile "wave.fsdb"\n'
+        'fsdbDumpvars 0 "harness"\n'
+        "run\nquit\n",
+        encoding="utf-8",
+    )
+    if duplicate_failure_logs:
+        for relative, content in (
+            ("nested/a/shared.log", "first preserved log\n"),
+            ("nested/b/shared.log", "second preserved log\n"),
+        ):
+            target = project / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+    aip_home = tmp_path / "aip"
+    aip_core = aip_home / "aip_core"
+    aip_core.mkdir(parents=True)
+    (aip_core / "aip_core_pkg.sv").write_text(
+        "package aip_core_pkg; endpackage\n", encoding="utf-8"
+    )
+    (aip_core / "aip_cmd.tcl").write_text(
+        "# synthetic Tcl\n", encoding="utf-8"
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_vcs = fake_bin / "vcs"
+    fake_vcs.write_text(
+        r'''#!/usr/bin/env bash
+set -euo pipefail
+
+compile_log=
+output=
+width_mismatch=false
+while (($#)); do
+    case $1 in
+        -l) compile_log=$2; shift 2 ;;
+        -o) output=$2; shift 2 ;;
+        +define+UVG_WIDTH_MISMATCH) width_mismatch=true; shift ;;
+        *) shift ;;
+    esac
+done
+[[ -n ${compile_log} && -n ${output} ]]
+if [[ ${width_mismatch} == true ]]; then
+    cat > "${compile_log}" <<'WIDTH'
+Error-[CFCILFBI] Cannot find cell in liblist
+  Cell 'UVG_STATIC_ASSERTION_FAILED' cannot be found in liblist for binding
+  instance 'template_refinement_tb.genblk8.u_uvg_if_width_mismatch'.
+WIDTH
+    if [[ -n ${WIDTH_PRIMARY_EXTRA:-} ]]; then
+        printf '%s\n' "${WIDTH_PRIMARY_EXTRA}" >> "${compile_log}"
+    fi
+    cat "${compile_log}"
+    if [[ -n ${WIDTH_CONSOLE_EXTRA:-} ]]; then
+        printf '%s\n' "${WIDTH_CONSOLE_EXTRA}"
+    fi
+    exit "${WIDTH_STATUS:-255}"
+fi
+
+printf 'synthetic compile completed\n' > "${compile_log}"
+printf 'synthetic compile console\n'
+cat > "${output}" <<'SIMV'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file=
+skip_vif=false
+while (($#)); do
+    case $1 in
+        -l) log_file=$2; shift 2 ;;
+        +UVG_SKIP_VIF_SET) skip_vif=true; shift ;;
+        *) shift ;;
+    esac
+done
+[[ -n ${log_file} ]]
+if [[ $(basename "$0") == simv_template ]]; then
+    if [[ ${skip_vif} == true ]]; then
+        expected_fatal='UVM_FATAL template_refinement_tb.sv(21) @ 0: uvm_test_top.m_consumer [UVG_VIF_GET] missing virtual interface type=uvg_probe_if component=uvm_test_top.m_consumer field=m_vif'
+        printf '%s\n' "${expected_fatal}" \
+            'UVM_ERROR :    0' \
+            'UVM_FATAL :    1' > "${log_file}"
+        if [[ -n ${MISSING_PRIMARY_EXTRA:-} ]]; then
+            printf '%s\n' "${MISSING_PRIMARY_EXTRA}" >> "${log_file}"
+        fi
+        printf '%s\n' "${expected_fatal}" \
+            'UVM_ERROR :    0' \
+            'UVM_FATAL :    1'
+        if [[ -n ${MISSING_CONSOLE_EXTRA:-} ]]; then
+            printf '%s\n' "${MISSING_CONSOLE_EXTRA}"
+        fi
+        exit "${MISSING_STATUS:-0}"
+    fi
+    printf '%s\n' \
+        'TEMPLATE_REFINEMENT_VCS_PASS' \
+        'UVM_ERROR : 0' \
+        'UVM_FATAL : 0' > "${log_file}"
+else
+    printf '%s\n' \
+        'TC PASSED.(warning:0,error:0,fatal:0)' \
+        'TEMPLATE_REFINEMENT_FSDB_UNAVAILABLE backend=portable' \
+        'TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpfile wave.fsdb' \
+        'TEMPLATE_REFINEMENT_WAVE_CALL fsdbDumpvars 0 harness' \
+        'UVM_ERROR : 0' \
+        'UVM_FATAL : 0' > "${log_file}"
+fi
+printf 'synthetic runtime console\n'
+SIMV
+chmod +x "${output}"
+''',
+        encoding="utf-8",
+    )
+    fake_vcs.chmod(0o755)
+    failure_tmp = tmp_path / "failures"
+    failure_tmp.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "TMPDIR": str(failure_tmp),
+            "WIDTH_STATUS": str(width_status),
+            "WIDTH_PRIMARY_EXTRA": width_primary_extra,
+            "WIDTH_CONSOLE_EXTRA": width_console_extra,
+            "MISSING_PRIMARY_EXTRA": missing_primary_extra,
+            "MISSING_CONSOLE_EXTRA": missing_console_extra,
+        }
+    )
+    environment.pop("VERDI_HOME", None)
+    environment.pop("NOVAS_HOME", None)
+
+    completed = subprocess.run(
+        [str(runner), str(project), str(aip_home)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    return completed, failure_tmp
+
+
+@pytest.mark.parametrize("status", [124, 137])
+def test_template_refinement_width_gate_rejects_timeout_status(
+    tmp_path, status
+):
+    completed, _ = run_synthetic_template_refinement_gate(
+        tmp_path, width_status=status
+    )
+
+    assert completed.returncode != 0
+    assert f"width mismatch compile timed out (exit {status})" in completed.stderr
+
+
+def test_template_refinement_width_gate_rejects_unrelated_vcs_error(tmp_path):
+    completed, _ = run_synthetic_template_refinement_gate(
+        tmp_path,
+        width_primary_extra="Error-[SYNTHETIC] unrelated injected failure",
+    )
+
+    assert completed.returncode != 0
+    assert "unexpected width mismatch diagnostic" in completed.stderr
+
+
+def test_template_refinement_width_gate_accepts_only_expected_diagnostic(tmp_path):
+    completed, _ = run_synthetic_template_refinement_gate(tmp_path)
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode == 0, output
+    assert "TEMPLATE_REFINEMENT_VCS_GATE_PASS" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("primary_extra", "console_extra"),
+    [
+        (
+            "UVM_FATAL injected.sv(1) @ 0: uvm_test_top [UNRELATED] extra fatal",
+            "",
+        ),
+        ("", "Error-[SYNTHETIC] unrelated runtime diagnostic"),
+    ],
+    ids=["extra-uvm-fatal", "console-vcs-error"],
+)
+def test_template_refinement_missing_vif_rejects_unrelated_diagnostic(
+    tmp_path, primary_extra, console_extra
+):
+    completed, _ = run_synthetic_template_refinement_gate(
+        tmp_path,
+        missing_primary_extra=primary_extra,
+        missing_console_extra=console_extra,
+    )
+
+    assert completed.returncode != 0
+    assert "unexpected missing VIF diagnostic" in completed.stderr
+
+
+def test_template_refinement_failure_logs_preserve_relative_paths(tmp_path):
+    completed, failure_tmp = run_synthetic_template_refinement_gate(
+        tmp_path,
+        width_status=0,
+        duplicate_failure_logs=True,
+    )
+
+    assert completed.returncode != 0
+    match = re.search(r"failure logs preserved at (.+)", completed.stderr)
+    assert match
+    failure_dir = Path(match.group(1))
+    assert failure_dir.parent == failure_tmp
+    assert failure_dir.name.startswith("template-refinement-failure.")
+    assert (failure_dir / "nested/a/shared.log").read_text(
+        encoding="utf-8"
+    ) == "first preserved log\n"
+    assert (failure_dir / "nested/b/shared.log").read_text(
+        encoding="utf-8"
+    ) == "second preserved log\n"
 
 
 def test_template_refinement_vcs_gate_rejects_stale_native_fsdb(tmp_path):
@@ -1218,10 +1463,11 @@ done
 [[ -n ${compile_log} && -n ${output} ]]
 if [[ ${width_mismatch} == true ]]; then
     printf '%s\n' \
-        'Error-[URMI] UVG_STATIC_ASSERTION_FAILED u_uvg_if_width_mismatch' \
+        'Error-[CFCILFBI] Cannot find cell in liblist' \
+        "  Cell 'UVG_STATIC_ASSERTION_FAILED' cannot be found in liblist for binding" \
+        "  instance 'template_refinement_tb.genblk8.u_uvg_if_width_mismatch'." \
         > "${compile_log}"
-    printf '%s\n' \
-        'Error-[URMI] UVG_STATIC_ASSERTION_FAILED u_uvg_if_width_mismatch'
+    cat "${compile_log}"
     exit 1
 fi
 printf 'synthetic compile completed\n' > "${compile_log}"
@@ -1242,10 +1488,13 @@ done
 [[ -n ${log_file} ]]
 if [[ $(basename "$0") == simv_template ]]; then
     if [[ ${skip_vif} == true ]]; then
+        expected_fatal='UVM_FATAL template_refinement_tb.sv(21) @ 0: uvm_test_top.m_consumer [UVG_VIF_GET] missing virtual interface type=uvg_probe_if component=uvm_test_top.m_consumer field=m_vif'
         printf '%s\n' \
-            'UVM_FATAL [UVG_VIF_GET] missing virtual interface field=m_vif' \
+            "${expected_fatal}" \
+            'UVM_ERROR : 0' \
+            'UVM_FATAL : 1' \
             > "${log_file}"
-        printf 'synthetic missing VIF runtime\n'
+        cat "${log_file}"
         exit 1
     fi
     printf '%s\n' \
