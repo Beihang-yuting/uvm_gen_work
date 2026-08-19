@@ -271,6 +271,10 @@ def test_generated_scb_matrix_assets_cover_runtime_contract():
     assert "source $env(AIP_HOME)/aip_core/aip_cmd.tcl" in smoke
     assert "AIP_CORE_HOME" not in runner
     assert "AIP_CORE_HOME" not in smoke
+    assert "common_scb_registry.sv" in runner
+    assert "common_scb_aip_adapter.sv" in runner
+    assert "aip_activity_subscriber.sv" in runner
+    assert "stale activity subscriber" in runner
 
     for invocation in (
         "scb_list",

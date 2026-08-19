@@ -328,9 +328,15 @@ validate_project() {
             fi
             ;;
         true)
-            if [[ ! -f ${project_dir}/common/common_scb_aip_adapter.sv \
+            if [[ ! -f ${project_dir}/common/common_scb_registry.sv \
+                    || ! -f ${project_dir}/common/common_scb_aip_adapter.sv \
                     || ! -f ${project_dir}/tc/tc_tcl.sv ]]; then
-                fail "${label}: AIP-on project is missing adapter/Tcl test"
+                fail "${label}: AIP-on project is missing registry/adapter/Tcl test"
+                return 1
+            fi
+            if [[ -e ${project_dir}/common/aip_activity_subscriber.sv ]] \
+                    || grep -Fq 'aip_activity_subscriber.sv' "${common_file}"; then
+                fail "${label}: AIP-on project contains stale activity subscriber"
                 return 1
             fi
             aip_incdir_count=$(grep -Fxc "${aip_filelist_sources[0]}" \

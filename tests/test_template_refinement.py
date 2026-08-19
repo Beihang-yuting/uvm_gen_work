@@ -1106,3 +1106,22 @@ def test_makefile_rerun_cleans_compiles_once_then_runs(
     assert "-xprop=cfg/xprop.cfg" in events[0]
     assert "+UVM_TESTNAME=tc_rerun" in events[1]
     assert "+ntb_random_seed=41" in events[1]
+
+
+def test_template_refinement_vcs_assets_cover_semantics():
+    runner = REPOSITORY / "tests/vcs/run_template_refinement.sh"
+    source = REPOSITORY / "tests/vcs/template_refinement_tb.sv"
+
+    assert runner.is_file() and runner.stat().st_mode & 0o111
+    assert source.is_file()
+    script = runner.read_text(encoding="utf-8")
+    for token in (
+        "+define+UVG_WIDTH_MISMATCH",
+        "+UVG_SKIP_VIF_SET",
+        "-xprop=xprop.cfg",
+        "-f initreg.cfg",
+        "-cm_hier coverage.cfg",
+        "-ucli -i wave.tcl",
+        "TEMPLATE_REFINEMENT_VCS_PASS",
+    ):
+        assert token in script
