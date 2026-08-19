@@ -206,9 +206,17 @@ if grep -Eiq '\{\{|\{%|%\}|syntax error|undefined (macro|type)' \
     exit 1
 fi
 
-./simv_template +UVM_TESTNAME=template_refinement_test \
+set +e
+timeout --kill-after=10s 90s \
+    ./simv_template +UVM_TESTNAME=template_refinement_test \
     +UVG_SKIP_VIF_SET -l run_missing_vif.log \
-    >run_missing_vif_console.log 2>&1 || true
+    >run_missing_vif_console.log 2>&1
+missing_vif_status=$?
+set -e
+if [[ ${missing_vif_status} -eq 124 || ${missing_vif_status} -eq 137 ]]; then
+    fail "missing VIF leg timed out (exit ${missing_vif_status})"
+    exit 1
+fi
 if ! grep -Eq 'UVG_VIF_GET.*field=m_vif' \
         run_missing_vif.log run_missing_vif_console.log; then
     fail 'missing VIF leg did not identify UVG_VIF_GET field=m_vif'
@@ -286,6 +294,7 @@ source wave.generated.tcl
 TCL
 fi
 
+rm -f -- wave.fsdb
 timeout --kill-after=10s 90s \
     ./simv_xprop +UVM_TESTNAME=tc_base -ucli -i wave.tcl \
     -l run_wave.log >run_wave_console.log 2>&1
