@@ -13,7 +13,9 @@ class common_uvm_scb #(type TRANS_TYPE,
 
     common_uvm_scb_cfg m_cfg;
     uvm_analysis_port#(result_t) m_result_ap;
+{% if aip_core %}
     protected common_scb_control_proxy m_proxy;
+{% endif %}
     protected state_t m_streams[stream_id_t];
     protected longint unsigned m_expected_inputs;
     protected longint unsigned m_actual_inputs;
@@ -102,6 +104,7 @@ class common_uvm_scb #(type TRANS_TYPE,
     extern protected function void finalize_pending();
 endclass
 
+{% if aip_core %}
 class common_scb_typed_proxy #(type TRANS_TYPE,
                                int STREAM_ID_WIDTH=64)
     extends common_scb_control_proxy;
@@ -139,6 +142,7 @@ class common_scb_typed_proxy #(type TRANS_TYPE,
         return 1;
     endfunction
 endclass
+{% endif %}
 
 function common_uvm_scb::new(string name="common_uvm_scb",
                              uvm_component parent=null);
@@ -196,6 +200,7 @@ function void common_uvm_scb::build_phase(uvm_phase phase);
             m_cfg.m_cmp_mode = SCB_UNORDERED;
         end
     endcase
+{% if aip_core %}
     begin
         common_scb_typed_proxy#(TRANS_TYPE, STREAM_ID_WIDTH) typed_proxy;
         string registry_error;
@@ -204,6 +209,7 @@ function void common_uvm_scb::build_phase(uvm_phase phase);
         if (!common_scb_registry::register_proxy(m_proxy, registry_error))
             `uvm_error("SCB_REGISTRY", registry_error)
     end
+{% endif %}
 endfunction
 
 function common_uvm_scb::state_t common_uvm_scb::state_for(

@@ -7,13 +7,11 @@ package       common_lib_pkg;
     import uvm_pkg::*;
 
     `include "common_dec.sv"
-    `include "common_draw_table.sv"
-    `include "common_report_server.sv"
-    `include "common_self_debug_scb.sv"
     `include "common_scb_types.sv"
     `include "common_scb_reporter.sv"
+{% if aip_core %}
     `include "common_scb_registry.sv"
-    `include "common_uvm_scb_legacy.sv"
+{% endif %}
     `include "common_uvm_scb.sv"
 
 endpackage

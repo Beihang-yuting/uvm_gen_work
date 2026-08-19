@@ -55,36 +55,35 @@ def read(project: Path, relative_path: str) -> str:
 EXPECTED_COMMON_TEMPLATES = [
     ("common_lib_pkg.sv", "common/common_pkg.sv.j2"),
     ("common_dec.sv", "common/common_dec.sv.j2"),
-    ("common_report_server.sv", "common/report_server.sv.j2"),
-    ("common_self_debug_scb.sv", "common/self_debug_scb.sv.j2"),
-    ("common_draw_table.sv", "common/draw_table.sv.j2"),
     ("common_scb_types.sv", "common/common_scb_types.sv.j2"),
     ("common_scb_reporter.sv", "common/common_scb_reporter.sv.j2"),
-    ("common_scb_registry.sv", "common/common_scb_registry.sv.j2"),
-    ("common_uvm_scb_legacy.sv", "common/legacy_scb.sv.j2"),
     ("common_uvm_scb.sv", "common/base_scb.sv.j2"),
+]
+
+EXPECTED_AIP_TEMPLATES = [
+    ("common_scb_registry.sv", "common/common_scb_registry.sv.j2"),
 ]
 
 EXPECTED_COMMON_INCLUDES = [
     "common_dec.sv",
-    "common_draw_table.sv",
-    "common_report_server.sv",
-    "common_self_debug_scb.sv",
     "common_scb_types.sv",
     "common_scb_reporter.sv",
-    "common_scb_registry.sv",
-    "common_uvm_scb_legacy.sv",
     "common_uvm_scb.sv",
 ]
 
 
-def assert_final_common_layout(templates, package: str) -> None:
-    assert templates == EXPECTED_COMMON_TEMPLATES
+def assert_final_common_layout(templates, package: str, aip_core: bool) -> None:
+    expected_templates = list(EXPECTED_COMMON_TEMPLATES)
+    expected_includes = list(EXPECTED_COMMON_INCLUDES)
+    if aip_core:
+        expected_templates[-1:-1] = EXPECTED_AIP_TEMPLATES
+        expected_includes[-1:-1] = ["common_scb_registry.sv"]
+    assert templates == expected_templates
     active_includes = re.findall(
         r'(?m)^[ \t]*`include[ \t]+"([^"\r\n]+)"[ \t]*$',
         strip_sv_comments(package),
     )
-    assert active_includes == EXPECTED_COMMON_INCLUDES
+    assert active_includes == expected_includes
 
 
 def strip_sv_comments(systemverilog: str) -> str:
@@ -145,9 +144,7 @@ def assert_aip_generation_contract(
     ]
     expected_lines = ["./common_lib_pkg.sv"]
     if aip_core:
-        expected_lines.extend(
-            ["./aip_activity_subscriber.sv", adapter_entry]
-        )
+        expected_lines.append(adapter_entry)
     assert active_lines == expected_lines
 
 
@@ -558,162 +555,72 @@ def test_registry_contract_rejects_broken_control_bodies():
             assert_registry_contract(broken)
 
 
-def test_common_output_contains_legacy_and_v2_scoreboard_files(
-    tmp_path, platform_type
-):
+def test_common_output_excludes_obsolete_files(tmp_path, platform_type):
     project = generate(tmp_path, platform_type)
     common_dir = project / "common"
-    required_files = [
+    obsolete_files = {
         "common_uvm_scb_legacy.sv",
-        "common_scb_types.sv",
-        "common_scb_reporter.sv",
-        "common_scb_registry.sv",
-        "common_uvm_scb.sv",
-    ]
-
-    missing_files = [
-        filename for filename in required_files if not (common_dir / filename).is_file()
-    ]
-    assert not missing_files, f"missing generated common files: {missing_files}"
-
-
-def test_legacy_and_v2_scoreboards_have_distinct_names(tmp_path, platform_type):
-    project = generate(tmp_path, platform_type)
-    legacy_path = project / "common/common_uvm_scb_legacy.sv"
-    v2_path = project / "common/common_uvm_scb.sv"
-    missing_files = [
-        path.name for path in (legacy_path, v2_path) if not path.is_file()
-    ]
-    assert not missing_files, f"missing generated scoreboard files: {missing_files}"
-
-    legacy = strip_sv_comments(read(project, "common/common_uvm_scb_legacy.sv"))
-    v2 = strip_sv_comments(read(project, "common/common_uvm_scb.sv"))
-
-    legacy_class = (
-        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+"
-        r"common_uvm_scb_legacy\b"
-    )
-    legacy_enum = (
-        r"(?ms)^[ \t]*typedef[ \t]+enum\b.*?\}\s*"
-        r"legacy_scb_cmp_mode_e\b\s*;"
-    )
-    legacy_cfg_class = (
-        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+"
-        r"common_uvm_scb_legacy_cfg\b"
-    )
-    legacy_manager_class = (
-        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+"
-        r"common_scb_legacy_stream_manager\b"
-    )
-    stale_enum = (
-        r"(?ms)^[ \t]*typedef[ \t]+enum\b[^;]*?\}\s*"
-        r"scb_cmp_mode\b\s*;"
-    )
-    stale_cfg_class = (
-        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+common_uvm_scb_cfg\b"
-    )
-    stale_manager_class = (
-        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+stream_trans_manager\b"
-    )
-    v2_class = (
-        r"(?m)^[ \t]*(?:virtual[ \t]+)?class[ \t]+common_uvm_scb\b"
-        r"[ \t\r\n]*#[ \t\r\n]*\("
-    )
-
-    assert re.search(
-        legacy_class, legacy
-    ), "missing legacy scoreboard class declaration"
-    assert re.search(legacy_enum, legacy), "missing legacy comparison-mode enum"
-    assert re.search(
-        legacy_cfg_class, legacy
-    ), "missing legacy scoreboard configuration class declaration"
-    assert re.search(
-        legacy_manager_class, legacy
-    ), "missing legacy stream-manager class declaration"
-    assert re.search(
-        r"(?m)^[ \t]*`ifndef[ \t]+COMMON_UVM_SCB_LEGACY__SV\b", legacy
-    ), "missing legacy scoreboard `ifndef guard"
-    assert re.search(
-        r"(?m)^[ \t]*`define[ \t]+COMMON_UVM_SCB_LEGACY__SV\b", legacy
-    ), "missing legacy scoreboard `define guard"
-    assert not re.search(
-        stale_enum, legacy
-    ), "legacy source still declares stale enum scb_cmp_mode"
-    assert not re.search(
-        stale_cfg_class, legacy
-    ), "legacy source still declares stale class common_uvm_scb_cfg"
-    assert not re.search(
-        stale_manager_class, legacy
-    ), "legacy source still declares stale class stream_trans_manager"
-    assert not re.search(
-        r"(?m)^[ \t]*`ifndef[ \t]+COMMON_UVM_SCB__SV\b", legacy
-    ), "legacy source still contains stale `ifndef COMMON_UVM_SCB__SV guard"
-    assert not re.search(
-        r"(?m)^[ \t]*`define[ \t]+COMMON_UVM_SCB__SV\b", legacy
-    ), "legacy source still contains stale `define COMMON_UVM_SCB__SV guard"
-    assert not re.search(
-        v2_class, legacy
-    ), "legacy source still declares the parameterized common_uvm_scb class"
-    assert re.search(v2_class, v2), "missing parameterized v2 scoreboard class"
-
-
-def test_common_package_includes_scoreboard_dependencies_in_order(
-    tmp_path, platform_type
-):
-    project = generate(tmp_path, platform_type)
-    common_package = strip_sv_comments(read(project, "common/common_lib_pkg.sv"))
-    required_includes = [
-        "common_dec.sv",
         "common_draw_table.sv",
-        "common_report_server.sv",
         "common_self_debug_scb.sv",
-        "common_scb_types.sv",
-        "common_scb_reporter.sv",
-        "common_scb_registry.sv",
-        "common_uvm_scb_legacy.sv",
-        "common_uvm_scb.sv",
-    ]
+        "aip_activity_subscriber.sv",
+        "common_report_server.sv",
+    }
+    assert {path.name for path in common_dir.iterdir()}.isdisjoint(obsolete_files)
+
+
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_common_package_includes_scoreboard_dependencies_in_order(
+    tmp_path, platform_type, aip_core
+):
+    project = generate(tmp_path, platform_type, aip_core=aip_core)
+    common_package = strip_sv_comments(read(project, "common/common_lib_pkg.sv"))
     active_includes = re.findall(
         r'(?m)^[ \t]*`include[ \t]+"([^"\r\n]+)"[ \t]*$',
         common_package,
     )
-    assert active_includes == required_includes, (
-        "common package include sequence mismatch: "
-        f"expected {required_includes}, got {active_includes}"
-    )
+    expected_includes = list(EXPECTED_COMMON_INCLUDES)
+    if aip_core:
+        expected_includes[-1:-1] = ["common_scb_registry.sv"]
+    assert active_includes == expected_includes
 
 
-def test_final_common_layout_contract_rejects_generator_or_package_reordering():
+@pytest.mark.parametrize("aip_core", [False, True], ids=["aip_off", "aip_on"])
+def test_final_common_layout_contract_rejects_generator_or_package_reordering(
+    aip_core,
+):
     config = ProjectConfig(
         block_name="top",
         author="test",
         agents=[AgentConfig("axi")],
         platform_type=PlatformType.ADVANCE,
-        aip_core=False,
+        aip_core=aip_core,
     )
     package = PlatformGenerator(config).render_template(
         "common/common_pkg.sv.j2",
         file_name="common_lib_pkg.sv",
     )
-    assert_final_common_layout(CommonGenerator.TEMPLATES, package)
+    templates = list(CommonGenerator.CORE_TEMPLATES)
+    if aip_core:
+        templates[-1:-1] = CommonGenerator.AIP_TEMPLATES
+    assert_final_common_layout(templates, package, aip_core)
 
-    wrong_templates = list(EXPECTED_COMMON_TEMPLATES)
+    wrong_templates = list(templates)
     wrong_templates[-1], wrong_templates[-2] = (
         wrong_templates[-2],
         wrong_templates[-1],
     )
     with pytest.raises(AssertionError):
-        assert_final_common_layout(wrong_templates, package)
+        assert_final_common_layout(wrong_templates, package, aip_core)
 
+    first = '    `include "common_scb_types.sv"'
+    second = '    `include "common_scb_reporter.sv"'
     wrong_package = package.replace(
-        '    `include "common_scb_reporter.sv"\n'
-        '    `include "common_scb_registry.sv"',
-        '    `include "common_scb_registry.sv"\n'
-        '    `include "common_scb_reporter.sv"',
+        f"{first}\n{second}",
+        f"{second}\n{first}",
     )
     assert wrong_package != package, "failed to construct package-order mutation"
     with pytest.raises(AssertionError):
-        assert_final_common_layout(EXPECTED_COMMON_TEMPLATES, wrong_package)
+        assert_final_common_layout(templates, wrong_package, aip_core)
 
 
 def test_v2_finalizes_in_check_and_only_renders_in_report(tmp_path, platform_type):
@@ -826,13 +733,11 @@ def test_aip_generation_contract_rejects_guard_and_order_regressions():
     non_aip_files = {"common_lib_pkg.sv", "common_uvm_scb.sv"}
     non_aip_filelist = "+incdir+./\n./common_lib_pkg.sv\n"
     aip_files = non_aip_files | {
-        "aip_activity_subscriber.sv",
         "common_scb_aip_adapter.sv",
     }
     aip_filelist = (
         "+incdir+./\n"
         "./common_lib_pkg.sv\n"
-        "./aip_activity_subscriber.sv\n"
         "./common_scb_aip_adapter.sv\n"
     )
 
@@ -850,8 +755,8 @@ def test_aip_generation_contract_rejects_guard_and_order_regressions():
             True,
             aip_files,
             aip_filelist.replace(
-                "./common_lib_pkg.sv\n./aip_activity_subscriber.sv",
-                "./aip_activity_subscriber.sv\n./common_lib_pkg.sv",
+                "./common_lib_pkg.sv\n./common_scb_aip_adapter.sv",
+                "./common_scb_aip_adapter.sv\n./common_lib_pkg.sv",
             ),
         )
 

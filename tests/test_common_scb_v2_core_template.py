@@ -353,9 +353,6 @@ def assert_final_status_idempotence_contract(core: str) -> None:
 
 def assert_task6_lifecycle_report_contract(core: str) -> None:
     declarations = {
-        "control proxy member": (
-            r"(?m)^[ \t]*protected\s+common_scb_control_proxy\s+m_proxy\s*;"
-        ),
         "row ordering helper": (
             r"(?m)^[ \t]*extern\s+protected\s+function\s+bit\s+row_before\s*\("
             r"\s*common_scb_problem_row\s+left\s*,\s*"
@@ -700,13 +697,13 @@ def assert_shared_int32_parser_contract(types_raw: str, core_raw: str) -> None:
     )
 
 
-def render_task6_sources() -> tuple[str, str]:
+def render_task6_sources(aip_core: bool = False) -> tuple[str, str]:
     config = ProjectConfig(
         block_name="top",
         author="test",
         agents=[AgentConfig("axi")],
         platform_type=PlatformType.ADVANCE,
-        aip_core=False,
+        aip_core=aip_core,
     )
     generator = PlatformGenerator(config)
     core = generator.render_template(
@@ -774,6 +771,23 @@ def test_task6_bounds_finite_reports_and_natively_sorts_all_rows():
 def test_task6_emits_final_status_once_per_reset_epoch():
     core_raw, _ = render_task6_sources()
     assert_final_status_idempotence_contract(strip_sv_comments(core_raw))
+
+
+def test_aip_core_template_registers_control_proxy():
+    core_raw, _ = render_task6_sources(aip_core=True)
+    assert_task6_proxy_contract(strip_sv_comments(core_raw))
+
+
+def test_non_aip_core_template_has_no_registry_dependency():
+    core_raw, _ = render_task6_sources(aip_core=False)
+    core = strip_sv_comments(core_raw)
+    for token in (
+        "common_scb_control_proxy",
+        "common_scb_typed_proxy",
+        "m_proxy",
+        "common_scb_registry",
+    ):
+        assert token not in core
 
 
 def assert_core_contract(core_raw: str) -> None:
@@ -1466,7 +1480,6 @@ def assert_core_contract(core_raw: str) -> None:
     ), "legacy DUT wrapper must call push_actual"
 
     assert_task6_lifecycle_report_contract(core)
-    assert_task6_proxy_contract(core)
 
     assert not re.search(r"\baip_|AIP_", core_raw), (
         "raw core template must remain AIP-independent"
@@ -1754,14 +1767,6 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
         "current gauge reset only with counters": (
             r"(?s)m_current_pending = 0;\s*if \(clear_counters\) begin",
             "if (clear_counters) begin\n        m_current_pending = 0;",
-        ),
-        "proxy accepts reserved minus two": (
-            r"if \(limit < -1\) begin",
-            "if (limit < -2) begin",
-        ),
-        "proxy registration skipped": (
-            r"if \(!common_scb_registry::register_proxy\(m_proxy, registry_error\)\)",
-            "if (0)",
         ),
     }
     for description, (pattern, replacement) in task_six_mutations.items():
