@@ -168,9 +168,14 @@ monitor.
 Advance keeps one monitor FIFO inside each agent. The environment does not add
 transaction analysis connections or automatically connect the agent, reference
 model, and checker. User code explicitly consumes the single agent stream and
-calls the typed task APIs:
+calls the typed task APIs. The example belongs inside a task of a
+`tc_base`-derived test, or another UVM component that owns or otherwise has
+access to the `m_env` handle:
 
 ```systemverilog
+axi_trans observed;
+axi_trans expected_q[$];
+
 m_env.m_axi_agt.get_mon_item(observed);
 m_env.m_rm.predict_axi(observed, expected_q);
 m_env.m_scb.send_axi_actual(observed);

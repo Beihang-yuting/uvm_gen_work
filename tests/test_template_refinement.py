@@ -311,20 +311,79 @@ OBSOLETE_COMMON = {
 
 def test_readme_describes_final_platform_contract():
     readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
-    for required in (
-        "Advance task-only",
-        "PORT TLM/FIFO",
-        "get_mon_item",
-        "predict_axi",
-        "send_axi_actual",
-        "send_axi_expected",
-        "AGENT_ONLY_MONITOR",
-        "UVG_IF_CONNECT",
-        "th/bind/bind_example.sv",
-        "$AIP_HOME/aip_core",
-        "+SCB_REPORT_LIMIT=-1",
-    ):
-        assert required in readme
+
+    def section(heading: str) -> str:
+        match = re.search(
+            rf"(?ms)^{re.escape(heading)}[ \t]*\n"
+            rf"(?P<body>.*?)(?=^#{{1,6}}[ \t]+|\Z)",
+            readme,
+        )
+        assert match, f"missing README section: {heading}"
+        return match.group("body")
+
+    platform = section("## Platform Types")
+    for mode in ("AGENT_MASTER", "AGENT_SLAVE", "AGENT_ONLY_MONITOR"):
+        assert mode in platform
+
+    advance = section("### Advance task-only routing")
+    advance_flow = """axi_trans observed;
+axi_trans expected_q[$];
+
+m_env.m_axi_agt.get_mon_item(observed);
+m_env.m_rm.predict_axi(observed, expected_q);
+m_env.m_scb.send_axi_actual(observed);
+foreach (expected_q[i])
+    m_env.m_scb.send_axi_expected(expected_q[i]);"""
+    assert advance_flow in advance
+    advance_text = " ".join(advance.split())
+    assert "inside a task of a `tc_base`-derived test" in advance_text
+    assert (
+        "or another UVM component that owns or otherwise has access to the "
+        "`m_env` handle"
+    ) in advance_text
+    assert "one external consumer" in advance_text
+
+    port_text = " ".join(section("### PORT TLM/FIFO routing").split())
+    assert "environment-owned TLM/FIFO" in port_text
+
+    transaction_text = " ".join(
+        section("## Transactions and comparison").split()
+    )
+    assert "fail-safe" in transaction_text
+    assert "returns a mismatch with `comparison not implemented`" in transaction_text
+
+    scoreboard_text = " ".join(section("## Common Scoreboard v2").split())
+    assert "by default, up to the top 10 problem streams" in scoreboard_text
+    assert "number of omitted problem streams" in scoreboard_text
+    assert "`+SCB_REPORT_LIMIT=0` prints the summary only" in scoreboard_text
+    assert "`+SCB_REPORT_LIMIT=-1` prints every problem stream" in scoreboard_text
+    assert "full unmatched list is off by default" in scoreboard_text
+
+    helper = section("## Interface and harness helpers")
+    assert re.search(
+        r"(?m)^`UVG_IF_CONNECT\(ROLE, FLOW, RTL_SIG, VIF_SIG\)$",
+        helper,
+    )
+    helper_text = " ".join(helper.split())
+    assert "RTL before VIF" in helper_text
+    assert (
+        "`th/harness.sv` is the final active source in `cfg/env.f`"
+        in helper_text
+    )
+    assert "`th/bind/bind_example.sv` line follows it" in helper_text
+    assert "commented out" in helper_text
+    assert "disabled by default" in helper_text
+
+    aip_text = " ".join(section("## aip_core Integration").split())
+    assert "sole supported layout is `$AIP_HOME/aip_core`" in aip_text
+    assert "+incdir+$AIP_HOME/aip_core" in aip_text
+    assert "$AIP_HOME/aip_core/aip_core_pkg.sv" in aip_text
+    assert "source $env(AIP_HOME)/aip_core/aip_cmd.tcl" in aip_text
+    assert "enable the commented monitor tick" in aip_text
+    assert "once per completed transaction or accepted beat" in aip_text
+    assert "never once per clock" in aip_text
+    assert "`end_test timeout`" in aip_text
+
     for removed in (
         "common_uvm_scb_legacy",
         "aip_activity_subscriber",
