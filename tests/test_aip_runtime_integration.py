@@ -341,6 +341,53 @@ def aip_runner_invocations(
     }
 
 
+def make_generated_scb_matrix(matrix_root: Path) -> dict[str, Path]:
+    projects = {}
+    for label, platform, aip_core in (
+        ("advance_off", PlatformType.ADVANCE, False),
+        ("advance_on", PlatformType.ADVANCE, True),
+        ("port_off", PlatformType.PORT, False),
+        ("port_on", PlatformType.PORT, True),
+    ):
+        output = matrix_root / label
+        output.mkdir(parents=True)
+        projects[label] = generate(output, platform, aip_core)
+    return projects
+
+
+def run_matrix_until_compile(
+    tmp_path: Path, projects: dict[str, Path], aip_home: Path
+) -> subprocess.CompletedProcess[str]:
+    tcl_script = tmp_path / "smoke script.tcl"
+    tcl_script.write_text("# test stub\n", encoding="utf-8")
+    stub_bin = tmp_path / "compile sentinel bin"
+    stub_bin.mkdir()
+    write_executable(
+        stub_bin / "timeout",
+        """\
+        #!/usr/bin/env bash
+        echo "EXPECTED_COMPILE_REACHED" >&2
+        exit 93
+        """,
+    )
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:{environment['PATH']}"
+    return subprocess.run(
+        [
+            str(GENERATED_SCB_MATRIX_RUNNER),
+            *(str(projects[label]) for label in (
+                "advance_off", "advance_on", "port_off", "port_on"
+            )),
+            str(aip_home),
+            str(tcl_script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+
 @pytest.mark.parametrize("runner_label", ["runtime", "matrix", "standalone"])
 @pytest.mark.parametrize("root_kind", ["missing", "invalid"])
 def test_aip_runners_reject_invalid_installation_root_cleanly(
@@ -366,6 +413,17 @@ def test_aip_runners_reject_invalid_installation_root_cleanly(
     assert str(aip_home) in completed.stderr
     assert "realpath:" not in completed.stderr
     assert "No such file or directory" not in completed.stderr
+
+
+def test_generated_scb_matrix_accepts_glob_metacharacters_in_aip_root(tmp_path):
+    projects = make_generated_scb_matrix(tmp_path / "glob root matrix")
+    aip_home = make_aip_installation(tmp_path / "AIP[*]?installation")
+
+    completed = run_matrix_until_compile(tmp_path, projects, aip_home)
+
+    assert completed.returncode == 93
+    assert "EXPECTED_COMPILE_REACHED" in completed.stderr
+    assert "AIP-on filelist entries" not in completed.stderr
 
 
 def test_generated_scb_matrix_validator_rejects_runtime_mutations(tmp_path):
@@ -746,6 +804,38 @@ def test_generated_scb_matrix_rejects_aip_incdir_mutations(
         )
         assert "aip_incdir=0" in completed.stderr
     assert "unexpected compile reached" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "alternate_reference",
+    (
+        "+incdir+$AIP_ROOT/aip_core",
+        "+incdir+$aip_home/aip_core",
+        "+incdir+/opt/aip_core",
+    ),
+    ids=("alternate-root", "lowercase-root", "concrete-root"),
+)
+def test_generated_scb_matrix_rejects_extra_aip_core_references(
+    tmp_path, alternate_reference
+):
+    projects = make_generated_scb_matrix(tmp_path / "extra AIP reference matrix")
+    tb_file = projects["advance_on"] / "cfg/tb.f"
+    tb_file.write_text(
+        tb_file.read_text(encoding="utf-8") + f"{alternate_reference}\n",
+        encoding="utf-8",
+    )
+    aip_home = make_aip_installation(tmp_path / "AIP installation")
+
+    completed = run_matrix_until_compile(tmp_path, projects, aip_home)
+
+    assert completed.returncode != 93
+    assert "advance_on: AIP-on filelist entries must appear exactly once" in (
+        completed.stderr
+    )
+    assert "aip_incdir=1" in completed.stderr
+    assert "aip_pkg=1" in completed.stderr
+    assert "aip_refs=3" in completed.stderr
+    assert "EXPECTED_COMPILE_REACHED" not in completed.stderr
 
 
 def test_aip_runtime_validator_rejects_adversarial_logs(tmp_path):

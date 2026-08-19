@@ -339,7 +339,12 @@ validate_project() {
                 "${tb_file}" || true)
             aip_reference_count=$(awk '
                 /^[[:space:]]*($|#|\/\/)/ { next }
-                /AIP[A-Z_]*HOME|aip_core_pkg[.]sv/ { count++ }
+                {
+                    line = tolower($0)
+                    if (line ~ /aip_core/ || line ~ /\$aip_[[:alnum:]_]+/) {
+                        count++
+                    }
+                }
                 END { print count + 0 }
             ' "${tb_file}")
             env_count=$(grep -Ec \
@@ -516,8 +521,8 @@ aip_compile_sources=(
     "${AIP_HOME}/aip_core/aip_core_pkg.sv"
 )
 aip_filelist_sources=(
-    "${aip_compile_sources[0]/${AIP_HOME}/\$AIP_HOME}"
-    "${aip_compile_sources[1]/${AIP_HOME}/\$AIP_HOME}"
+    '+incdir+$AIP_HOME/aip_core'
+    '$AIP_HOME/aip_core/aip_core_pkg.sv'
 )
 if [[ ! -d ${aip_compile_sources[0]#+incdir+} \
         || ! -f ${aip_compile_sources[1]} \
