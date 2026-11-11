@@ -68,6 +68,13 @@ class {{ name }}_trans extends uvm_sequence_item;
         return -1;
     endfunction
 
+    // 功能：为公共 SCB 提供稳定的跨方向报文键。
+    // 输入/输出：无输入；返回空字符串表示该事务使用旧的 stream/FIFO 匹配。
+    // 边界/副作用：默认实现不猜测 descriptor 或对象句柄，协议事务应覆盖此函数。
+    virtual function string get_scb_packet_key();
+        return "";
+    endfunction
+
 {% if aip_core %}
 
     // --- aip_cmdline parameter loading ---

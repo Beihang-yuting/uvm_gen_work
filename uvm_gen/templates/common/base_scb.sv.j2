@@ -5,6 +5,7 @@
 class common_uvm_scb #(type TRANS_TYPE,
                        int STREAM_ID_WIDTH=64) extends uvm_scoreboard;
     typedef bit [STREAM_ID_WIDTH-1:0] stream_id_t;
+    typedef string packet_key_t;
     typedef common_scb_pending_item#(TRANS_TYPE) pending_t;
     typedef common_scb_stream_state#(TRANS_TYPE) state_t;
     typedef common_scb_result#(TRANS_TYPE) result_t;
@@ -45,6 +46,16 @@ class common_uvm_scb #(type TRANS_TYPE,
     extern function void push_actual(TRANS_TYPE tr,
                                      stream_id_t stream_id='1,
                                      int kind=-1);
+    // keyed API 只增加稳定报文键，不改变原 ordered/unordered 接口。
+    // 同一 stream 和 packet_key 的重复报文按 FIFO 保留，不覆盖已有项。
+    extern function void push_expected_keyed(TRANS_TYPE tr,
+                                             stream_id_t stream_id='1,
+                                             int kind=-1,
+                                             packet_key_t packet_key="");
+    extern function void push_actual_keyed(TRANS_TYPE tr,
+                                           stream_id_t stream_id='1,
+                                           int kind=-1,
+                                           packet_key_t packet_key="");
     extern function scb_status_e get_status();
     extern function bit is_clean();
     extern function string get_summary();
@@ -73,6 +84,10 @@ class common_uvm_scb #(type TRANS_TYPE,
     extern protected function void reconcile_ordered_lossy(state_t state);
     extern protected function void reconcile_unordered_expected(state_t state);
     extern protected function void reconcile_unordered_actual(state_t state);
+    extern function void reconcile_keyed_expected(
+        state_t state, packet_key_t packet_key);
+    extern function void reconcile_keyed_actual(
+        state_t state, packet_key_t packet_key);
     extern protected function void record_match(state_t state,
                                                  pending_t expected,
                                                  pending_t actual,
@@ -102,6 +117,7 @@ class common_uvm_scb #(type TRANS_TYPE,
                                               common_scb_problem_row right);
     extern protected function common_scb_problem_row make_row(state_t state);
     extern protected function void finalize_pending();
+    extern function void finalize_keyed_pending(state_t state);
 endclass
 
 {% if aip_core %}
@@ -316,9 +332,74 @@ function void common_uvm_scb::push_actual(TRANS_TYPE tr,
     endcase
 endfunction
 
+// 功能：登记带稳定 packet_key 的 expected，并按 stream/key 立即匹配 actual。
+// 输入/输出：输入事务、stream、kind 和 packet_key；无返回值。
+// 边界/副作用：空 key 视为配置错误并计入 overflow；同 key 重复项按到达顺序匹配。
+function void common_uvm_scb::push_expected_keyed(
+    TRANS_TYPE tr,
+    stream_id_t stream_id='1,
+    int kind=-1,
+    packet_key_t packet_key=""
+);
+    TRANS_TYPE retained;
+    state_t state;
+    pending_t pending;
+
+    state = state_for(stream_id);
+    m_expected_inputs++;
+    state.expected_inputs++;
+    if (packet_key.len() == 0) begin
+        record_overflow(state, stream_id, "expected", tr, kind);
+        emit_detail(stream_id, "SCB_EMPTY_PACKET_KEY",
+                    "expected packet_key is empty");
+        return;
+    end
+    if (!retained_copy(tr, stream_id, "expected", retained)) return;
+    if (!can_enqueue(state, stream_id, "expected",
+                     state.keyed_expected_count())) return;
+    pending = new(retained, kind, packet_key, 1);
+    state.expected_by_key[packet_key].push_back(pending);
+    m_current_pending++;
+    update_peak(state);
+    reconcile_keyed_expected(state, packet_key);
+endfunction
+
+// 功能：登记带稳定 packet_key 的 actual，并按 stream/key 立即匹配 expected。
+// 输入/输出：输入事务、stream、kind 和 packet_key；无返回值。
+// 边界/副作用：空 key 视为协议错误；actual 先到时保留，expected 后到仍可匹配。
+function void common_uvm_scb::push_actual_keyed(
+    TRANS_TYPE tr,
+    stream_id_t stream_id='1,
+    int kind=-1,
+    packet_key_t packet_key=""
+);
+    TRANS_TYPE retained;
+    state_t state;
+    pending_t pending;
+
+    state = state_for(stream_id);
+    m_actual_inputs++;
+    state.actual_inputs++;
+    if (packet_key.len() == 0) begin
+        record_overflow(state, stream_id, "actual", tr, kind);
+        emit_detail(stream_id, "SCB_EMPTY_PACKET_KEY",
+                    "actual packet_key is empty");
+        return;
+    end
+    if (!retained_copy(tr, stream_id, "actual", retained)) return;
+    if (!can_enqueue(state, stream_id, "actual",
+                     state.keyed_actual_count())) return;
+    pending = new(retained, kind, packet_key, 1);
+    state.actual_by_key[packet_key].push_back(pending);
+    m_current_pending++;
+    update_peak(state);
+    reconcile_keyed_actual(state, packet_key);
+endfunction
+
 function void common_uvm_scb::update_peak(state_t state);
     longint unsigned depth;
     depth = state.expected_q.size() + state.actual_q.size();
+    depth += state.keyed_expected_count() + state.keyed_actual_count();
     if (depth > state.peak_pending)
         state.peak_pending = depth;
     if (m_current_pending > m_peak_pending)
@@ -415,6 +496,46 @@ function void common_uvm_scb::reconcile_unordered_actual(state_t state);
     end
 endfunction
 
+// 功能：匹配一个 keyed expected 与同 key 的 actual。
+// 输入/输出：输入 stream 状态和 packet_key；无返回值。
+// 边界/副作用：同 key 的多项只消费一对；内容错误立即记录，不扫描其他 key。
+function void common_uvm_scb::reconcile_keyed_expected(
+    state_t state,
+    packet_key_t packet_key
+);
+    pending_t expected;
+    pending_t actual;
+    string diff;
+
+    if (!state.expected_by_key.exists(packet_key) ||
+        !state.actual_by_key.exists(packet_key) ||
+        (state.expected_by_key[packet_key].size() == 0) ||
+        (state.actual_by_key[packet_key].size() == 0)) return;
+
+    expected = state.expected_by_key[packet_key].pop_front();
+    actual   = state.actual_by_key[packet_key].pop_front();
+    if (state.expected_by_key[packet_key].size() == 0)
+        state.expected_by_key.delete(packet_key);
+    if (state.actual_by_key[packet_key].size() == 0)
+        state.actual_by_key.delete(packet_key);
+
+    if (compare_items(expected.tr, actual.tr, expected.kind, diff))
+        record_match(state, expected, actual, diff);
+    else
+        record_mismatch(state, expected, actual,
+                        {"packet_key=", packet_key, " ", diff});
+endfunction
+
+// 功能：匹配一个 keyed actual 与同 key 的 expected。
+// 输入/输出：输入 stream 状态和 packet_key；无返回值。
+// 边界/副作用：调用路径与 expected-first 对称，保证两侧任意先到都能匹配。
+function void common_uvm_scb::reconcile_keyed_actual(
+    state_t state,
+    packet_key_t packet_key
+);
+    reconcile_keyed_expected(state, packet_key);
+endfunction
+
 function void common_uvm_scb::publish_result(state_t state,
                                              pending_t expected,
                                              pending_t actual,
@@ -427,6 +548,8 @@ function void common_uvm_scb::publish_result(state_t state,
     result.actual = (actual == null) ? null : actual.tr;
     result.kind = (expected != null) ? expected.kind
                                      : ((actual != null) ? actual.kind : -1);
+    result.packet_key = (expected != null) ? expected.packet_key
+                                           : ((actual != null) ? actual.packet_key : "");
     result.matched = matched;
     result.diff = diff;
     m_result_ap.write(result);
@@ -507,6 +630,8 @@ function common_scb_problem_row common_uvm_scb::make_row(state_t state);
     common_scb_problem_row row = new();
     longint unsigned pending_expected = state.expected_q.size();
     longint unsigned pending_actual = state.actual_q.size();
+    pending_expected += state.keyed_expected_count();
+    pending_actual += state.keyed_actual_count();
     if ((state.mismatches + state.unexpected_actuals + state.overflows) != 0)
         row.status = SCB_FAIL;
     else if ((state.allowed_drops + state.diagnostic_warnings
@@ -541,7 +666,9 @@ endfunction
 function bit common_uvm_scb::is_clean();
     foreach (m_streams[id]) begin
         if ((m_streams[id].expected_q.size() != 0)
-            || (m_streams[id].actual_q.size() != 0)) return 0;
+            || (m_streams[id].actual_q.size() != 0)
+            || (m_streams[id].keyed_expected_count() != 0)
+            || (m_streams[id].keyed_actual_count() != 0)) return 0;
     end
     return get_status() == SCB_PASS;
 endfunction
@@ -552,6 +679,8 @@ function string common_uvm_scb::get_summary();
     foreach (m_streams[id]) begin
         pending_expected += m_streams[id].expected_q.size();
         pending_actual += m_streams[id].actual_q.size();
+        pending_expected += m_streams[id].keyed_expected_count();
+        pending_actual += m_streams[id].keyed_actual_count();
     end
     return $sformatf({
         "status=%s expected=%0d actual=%0d match=%0d mismatch=%0d ",
@@ -639,8 +768,50 @@ function void common_uvm_scb::finalize_pending();
         while (state.actual_q.size() != 0)
             record_unexpected(state, state.actual_q.pop_front(),
                               "actual transaction has no expected match at check phase");
+        finalize_keyed_pending(state);
     end
     m_finalized = 1;
+endfunction
+
+// 功能：在 check_phase 结束所有 keyed pending，分别报告缺失 expected 和多余 actual。
+// 输入/输出：输入一个 stream 状态；无返回值。
+// 边界/副作用：只清理当前 epoch，不改变全局计数清零策略；重复 key 逐项报告。
+function void common_uvm_scb::finalize_keyed_pending(state_t state);
+    string expected_keys[$];
+    string actual_keys[$];
+    pending_t pending;
+
+    foreach (state.expected_by_key[key]) expected_keys.push_back(key);
+    foreach (state.actual_by_key[key]) actual_keys.push_back(key);
+
+    foreach (expected_keys[i]) begin
+        while (state.expected_by_key.exists(expected_keys[i]) &&
+               (state.expected_by_key[expected_keys[i]].size() != 0)) begin
+            pending = state.expected_by_key[expected_keys[i]].pop_front();
+            record_mismatch(
+                state,
+                pending,
+                null,
+                {"packet_key=", expected_keys[i],
+                 " expected transaction has no actual match at check phase"}
+            );
+        end
+        state.expected_by_key.delete(expected_keys[i]);
+    end
+
+    foreach (actual_keys[i]) begin
+        while (state.actual_by_key.exists(actual_keys[i]) &&
+               (state.actual_by_key[actual_keys[i]].size() != 0)) begin
+            pending = state.actual_by_key[actual_keys[i]].pop_front();
+            record_unexpected(
+                state,
+                pending,
+                {"packet_key=", actual_keys[i],
+                 " actual transaction has no expected match at check phase"}
+            );
+        end
+        state.actual_by_key.delete(actual_keys[i]);
+    end
 endfunction
 
 function void common_uvm_scb::check_phase(uvm_phase phase);

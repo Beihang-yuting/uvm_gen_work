@@ -1569,8 +1569,8 @@ def test_standalone_core_template_implements_task6_lifecycle_report_contract():
             "cloned == null",
         ),
         "blocking expected API": (
-            r"extern function void push_expected",
-            "extern task push_expected",
+            r"extern function void push_expected\s*\(",
+            "extern task push_expected(",
         ),
         "missing expected pending increment": (
             r"(?s)(function void common_uvm_scb::push_expected\b.*?"

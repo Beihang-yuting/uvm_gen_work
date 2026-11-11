@@ -68,9 +68,18 @@ endclass
 class common_scb_pending_item #(type TRANS_TYPE=uvm_sequence_item);
     TRANS_TYPE tr;
     int kind;
-    function new(TRANS_TYPE tr=null, int kind=-1);
+    string packet_key;
+    bit keyed;
+
+    // 功能：保存一侧待比较事务及其可选报文键。
+    // 输入/输出：输入为事务、kind、packet_key 和 keyed；无返回值。
+    // 边界/副作用：packet_key 只在 keyed=1 时参与匹配；重复键由上层队列保留。
+    function new(TRANS_TYPE tr=null, int kind=-1,
+                 string packet_key="", bit keyed=0);
         this.tr = tr;
         this.kind = kind;
+        this.packet_key = packet_key;
+        this.keyed = keyed;
     endfunction
 endclass
 
@@ -80,6 +89,7 @@ class common_scb_result #(type TRANS_TYPE=uvm_sequence_item) extends uvm_object;
     TRANS_TYPE actual;
     longint unsigned stream_id;
     int kind;
+    string packet_key;
     bit matched;
     string diff;
     function new(string name="common_scb_result");
@@ -91,6 +101,9 @@ class common_scb_stream_state #(type TRANS_TYPE=uvm_sequence_item);
     typedef common_scb_pending_item#(TRANS_TYPE) pending_t;
     pending_t expected_q[$];
     pending_t actual_q[$];
+    // keyed 队列按报文键保留重复项，不能使用单个 associative-array 元素覆盖。
+    pending_t expected_by_key[string][$];
+    pending_t actual_by_key[string][$];
     longint unsigned stream_id;
     longint unsigned expected_inputs;
     longint unsigned actual_inputs;
@@ -107,7 +120,28 @@ class common_scb_stream_state #(type TRANS_TYPE=uvm_sequence_item);
     endfunction
     function longint unsigned issue_count();
         return mismatches + allowed_drops + unexpected_actuals + overflows
-             + diagnostic_warnings + expected_q.size() + actual_q.size();
+             + diagnostic_warnings + expected_q.size() + actual_q.size()
+             + keyed_expected_count() + keyed_actual_count();
+    endfunction
+
+    // 功能：统计当前 stream 中 keyed expected 的待比较项。
+    // 输入/输出：无输入，返回待比较项数量。
+    // 边界/副作用：只读遍历，不改变 associative array。
+    function longint unsigned keyed_expected_count();
+        longint unsigned count;
+        count = 0;
+        foreach (expected_by_key[key]) count += expected_by_key[key].size();
+        return count;
+    endfunction
+
+    // 功能：统计当前 stream 中 keyed actual 的待比较项。
+    // 输入/输出：无输入，返回待比较项数量。
+    // 边界/副作用：只读遍历，不改变 associative array。
+    function longint unsigned keyed_actual_count();
+        longint unsigned count;
+        count = 0;
+        foreach (actual_by_key[key]) count += actual_by_key[key].size();
+        return count;
     endfunction
 endclass
 

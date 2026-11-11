@@ -336,6 +336,7 @@ module common_scb_unit_tb;
         scb_probe m_exact_fail;
         scb_probe m_lossy;
         scb_probe m_unordered;
+        scb_probe m_keyed;
         scb_probe m_overflow;
         scb_probe m_many;
         scb_probe m_topn;
@@ -460,6 +461,21 @@ module common_scb_unit_tb;
                 "SCB_MISMATCH", UVM_ERROR, 1, "expected=1 actual=2");
             m_catcher.expect_report("uvm_test_top.m_reset_counters",
                 "SCB_MISMATCH", UVM_ERROR, 1, "expected=2 actual=3");
+            m_catcher.expect_report("uvm_test_top.m_keyed",
+                "SCB_MISMATCH", UVM_ERROR, 1,
+                "packet_key=byte-error expected=8 actual=9");
+            m_catcher.expect_report("uvm_test_top.m_keyed",
+                "SCB_MISMATCH", UVM_ERROR, 1,
+                "packet_key=pf0-q0 expected transaction has no actual match");
+            m_catcher.expect_report("uvm_test_top.m_keyed",
+                "SCB_UNEXPECTED_ACTUAL", UVM_ERROR, 1,
+                "packet_key=pf0-q0 actual transaction has no expected match");
+            m_catcher.expect_report("uvm_test_top.m_keyed",
+                "SCB_MISMATCH", UVM_ERROR, 1,
+                "packet_key=missing-actual expected transaction has no actual match");
+            m_catcher.expect_report("uvm_test_top.m_keyed",
+                "SCB_UNEXPECTED_ACTUAL", UVM_ERROR, 1,
+                "packet_key=unexpected-actual actual transaction has no expected match");
 
             m_catcher.expect_report("uvm_test_top.m_topn",
                 "SCB_ACTUAL_FIRST", UVM_WARNING, 1, actual_first);
@@ -497,6 +513,7 @@ module common_scb_unit_tb;
             expect_final("uvm_test_top.m_exact_fail", UVM_ERROR, "SCB_FAIL");
             expect_final("uvm_test_top.m_lossy", UVM_WARNING, "SCB_WARN");
             expect_final("uvm_test_top.m_unordered", UVM_INFO, "SCB_PASS");
+            expect_final("uvm_test_top.m_keyed", UVM_INFO, "SCB_PASS");
             expect_final("uvm_test_top.m_overflow", UVM_ERROR, "SCB_FAIL");
             expect_final("uvm_test_top.m_many", UVM_ERROR, "SCB_FAIL");
             expect_final("uvm_test_top.m_topn", UVM_ERROR, "SCB_FAIL");
@@ -526,6 +543,8 @@ module common_scb_unit_tb;
             expect_cfg_warning("uvm_test_top.m_lossy", expected_cfg_warn,
                                expected_cfg_text);
             expect_cfg_warning("uvm_test_top.m_unordered", expected_cfg_warn,
+                               expected_cfg_text);
+            expect_cfg_warning("uvm_test_top.m_keyed", expected_cfg_warn,
                                expected_cfg_text);
             expect_cfg_warning("uvm_test_top.m_overflow", expected_cfg_warn,
                                expected_cfg_text);
@@ -604,6 +623,7 @@ module common_scb_unit_tb;
             m_exact_fail = scb_probe::type_id::create("m_exact_fail", this);
             m_lossy = scb_probe::type_id::create("m_lossy", this);
             m_unordered = scb_probe::type_id::create("m_unordered", this);
+            m_keyed = scb_probe::type_id::create("m_keyed", this);
             m_overflow = scb_probe::type_id::create("m_overflow", this);
             m_many = scb_probe::type_id::create("m_many", this);
             m_topn = scb_probe::type_id::create("m_topn", this);
@@ -633,6 +653,7 @@ module common_scb_unit_tb;
             m_exact_fail.m_cfg.m_cmp_mode = SCB_ORDERED_EXACT;
             m_lossy.m_cfg.m_cmp_mode = SCB_ORDERED_LOSSY;
             m_unordered.m_cfg.m_cmp_mode = SCB_UNORDERED;
+            m_keyed.m_cfg.m_cmp_mode = SCB_UNORDERED;
             m_overflow.m_cfg.m_cmp_mode = SCB_UNORDERED;
             m_overflow.m_cfg.m_pending_limit = 1;
             m_many.m_cfg.m_cmp_mode = SCB_UNORDERED;
@@ -662,6 +683,7 @@ module common_scb_unit_tb;
             m_exact_fail.m_cfg.m_report_en = 0;
             m_lossy.m_cfg.m_report_en = 0;
             m_unordered.m_cfg.m_report_en = 0;
+            m_keyed.m_cfg.m_report_en = 0;
             m_overflow.m_cfg.m_report_en = 0;
             m_topn.m_cfg.m_report_en = 0;
             m_reset.m_cfg.m_report_en = 0;
@@ -1121,6 +1143,64 @@ module common_scb_unit_tb;
             m_unordered.push_actual(item(2), 64'h30);
             m_unordered.push_actual(item(1), 64'h30);
 
+            // Keyed path: actual may arrive first and duplicate keys retain
+            // multiplicity instead of replacing the earlier pending item.
+            m_keyed.push_actual_keyed(item(22), 64'h301, -1, "pkt-b");
+            m_keyed.push_expected_keyed(item(22), 64'h301, -1, "pkt-b");
+            m_keyed.push_expected_keyed(item(23), 64'h301, -1, "pkt-c");
+            m_keyed.push_expected_keyed(item(23), 64'h301, -1, "pkt-c");
+            m_keyed.push_actual_keyed(item(23), 64'h301, -1, "pkt-c");
+            m_keyed.push_actual_keyed(item(23), 64'h301, -1, "pkt-c");
+            unit_check(m_keyed.match_count() == 3,
+                       "keyed matching did not preserve duplicate packet keys");
+            unit_check(m_keyed.is_clean(),
+                       "keyed expected/actual matching left pending items");
+
+            // A stream ID is the Function/queue partition.  The same qid and
+            // key on another PF/VF stream must stay unmatched at finalization.
+            m_keyed.reset_state(1);
+            m_keyed.push_expected_keyed(item(7), 64'h401, -1, "pf0-q0");
+            m_keyed.push_actual_keyed(item(7), 64'h402, -1, "pf0-q0");
+            m_keyed.probe_finalize_pending();
+            unit_check((m_keyed.mismatch_count() == 1)
+                       && (m_keyed.unexpected_count() == 1)
+                       && (m_keyed.get_status() == SCB_FAIL),
+                       "keyed stream isolation did not report both sides");
+
+            // A one-byte-equivalent payload value error must be reported even
+            // when the packet key and stream are otherwise identical.
+            m_keyed.reset_state(1);
+            m_keyed.push_expected_keyed(item(8), 64'h403, -1, "byte-error");
+            m_keyed.push_actual_keyed(item(9), 64'h403, -1, "byte-error");
+            unit_check((m_keyed.mismatch_count() == 1)
+                       && (m_keyed.current_pending() == 0),
+                       "keyed payload mismatch was not consumed");
+
+            // Missing expected/actual entries are diagnosed during finalization
+            // with the key retained in the report text.
+            m_keyed.reset_state(1);
+            m_keyed.push_expected_keyed(item(10), 64'h404, -1, "missing-actual");
+            m_keyed.probe_finalize_pending();
+            unit_check((m_keyed.mismatch_count() == 1)
+                       && (m_keyed.current_pending() == 0),
+                       "missing keyed actual was not finalized");
+
+            m_keyed.reset_state(1);
+            m_keyed.push_actual_keyed(item(11), 64'h405, -1, "unexpected-actual");
+            m_keyed.probe_finalize_pending();
+            unit_check((m_keyed.unexpected_count() == 1)
+                       && (m_keyed.current_pending() == 0),
+                       "unexpected keyed actual was not finalized");
+
+            // Reset starts a new epoch and discards pending keyed entries.
+            m_keyed.reset_state(1);
+            m_keyed.push_expected_keyed(item(12), 64'h406, -1, "reset-epoch");
+            unit_check(m_keyed.current_pending() == 1,
+                       "keyed reset precondition did not retain pending entry");
+            m_keyed.reset_state(1);
+            unit_check(m_keyed.is_clean() && (m_keyed.current_pending() == 0),
+                       "keyed reset did not clear the pending epoch");
+
             m_overflow.push_expected(item(30), 64'h40);
             m_overflow.push_expected(item(31), 64'h40);
 
@@ -1190,7 +1270,7 @@ module common_scb_unit_tb;
                   $sformatf("report limit=%0d expected=%0d",
                             m_many.m_cfg.m_report_limit, expected_limit));
             unit_check(m_catcher.count_id("SCB_CFG")
-                      == expected_config_warn + (17 * expected_cfg_warn),
+                      == expected_config_warn + (18 * expected_cfg_warn),
                   "SCB_CFG warning count does not include configured and plusarg warnings");
             unit_check(m_catcher.count("uvm_test_top.m_cfg_invalid", "SCB_CFG")
                       == 1 + expected_cfg_warn,
@@ -1316,6 +1396,8 @@ module common_scb_unit_tb;
                   "unordered out-of-order matching failed");
             unit_check((m_unordered.match_count() == 2) && m_unordered.is_clean(),
                   "unordered pass counters/clean status mismatch");
+            unit_check(m_keyed.is_clean() && (m_keyed.current_pending() == 0),
+                  "keyed final reset/clean status mismatch");
             unit_check(m_overflow.get_status() == SCB_FAIL,
                   "pending overflow did not fail");
             unit_check((m_overflow.overflow_count() == 1)

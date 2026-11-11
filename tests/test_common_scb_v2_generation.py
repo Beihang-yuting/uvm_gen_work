@@ -1042,9 +1042,11 @@ def test_v2_types_expose_approved_defaults(tmp_path, platform_type):
     assert re.search(
         r"return\s+mismatches\s*\+\s*allowed_drops\s*\+\s*"
         r"unexpected_actuals\s*\+\s*overflows\s*\+\s*diagnostic_warnings\s*\+\s*"
-        r"expected_q\.size\s*\(\s*\)\s*\+\s*actual_q\.size\s*\(\s*\)\s*;",
+        r"expected_q\.size\s*\(\s*\)\s*\+\s*actual_q\.size\s*\(\s*\)\s*"
+        r"\+\s*keyed_expected_count\s*\(\s*\)\s*\+\s*"
+        r"keyed_actual_count\s*\(\s*\)\s*;",
         issue_count.group("body"),
-    ), "issue_count must include every Task 5 issue source"
+    ), "issue_count must include ordered and keyed pending sources"
 
 
 def test_v2_core_has_function_api_and_result_port(tmp_path, platform_type):
